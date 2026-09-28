@@ -11,6 +11,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_NAME=".venv"
 SEARXNG_PORT="${SEARXNG_PORT:-8888}"
+SETTINGS_FILE="${REPO_DIR}/settings.yml"
 
 # ============================================================================
 # COLORS FOR OUTPUT
@@ -55,8 +56,8 @@ validate_environment() {
     fi
     
     # Check settings file exists
-    if [ ! -f "settings.yml" ]; then
-        log_error "settings.yml not found. Please ensure the configuration exists."
+    if [ ! -f "${SETTINGS_FILE}" ]; then
+        log_error "settings.yml not found at ${SETTINGS_FILE}"
         exit 1
     fi
     
@@ -77,33 +78,172 @@ detect_codespaces_port() {
 }
 
 # ============================================================================
+# VALIDATE CONFIGURATION
+# ============================================================================
+validate_configuration() {
+    log_info "Validating configuration from ${SETTINGS_FILE}..."
+    
+    cd "${REPO_DIR}"
+    
+    # Activate virtual environment to use Python
+    source "${VENV_NAME}/bin/activate"
+    
+    # Use Python to validate the YAML and check key settings
+    local validation_output
+    validation_output=$(python3 << EOF
+import yaml
+import sys
+
+try:
+    with open('${SETTINGS_FILE}', 'r') as f:
+        config = yaml.safe_load(f)
+    
+    if config is None:
+        print("ERROR: settings.yml is empty")
+        sys.exit(1)
+    
+    # Check search formats
+    formats = config.get('search', {}).get('formats', [])
+    if 'json' not in formats:
+        print("ERROR: JSON format not enabled in search.formats")
+        sys.exit(1)
+    else:
+        print(f"OK: JSON format enabled, formats = {formats}")
+    
+    # Check server settings
+    server = config.get('server', {})
+    
+    bind_addr = server.get('bind_address', 'NOT SET')
+    if bind_addr != '0.0.0.0':
+        print(f"ERROR: bind_address is '{bind_addr}', expected '0.0.0.0'")
+        sys.exit(1)
+    else:
+        print(f"OK: bind_address = '{bind_addr}'")
+    
+    port = server.get('port', 'NOT SET')
+    print(f"OK: port = {port}")
+    
+    method = server.get('method', 'NOT SET')
+    if method != 'GET':
+        print(f"ERROR: method is '{method}', expected 'GET'")
+        sys.exit(1)
+    else:
+        print(f"OK: method = '{method}'")
+    
+    print("\\nConfiguration validation PASSED")
+    
+except Exception as e:
+    print(f"ERROR: {e}")
+    sys.exit(1)
+EOF
+    )
+    
+    echo "${validation_output}"
+    
+    # Check exit code of the Python validation
+    if [ $? -ne 0 ]; then
+        log_error "Configuration validation failed"
+        deactivate
+        exit 1
+    fi
+    
+    deactivate
+    log_success "Configuration validated"
+}
+
+# ============================================================================
+# VERIFY RUNTIME CONFIGURATION
+# ============================================================================
+verify_runtime_config() {
+    log_info "Verifying runtime configuration..."
+    
+    cd "${REPO_DIR}"
+    
+    # Activate virtual environment
+    source "${VENV_NAME}/bin/activate"
+    
+    # Set the same environment variables that will be used for the server
+    export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
+    export SEARXNG_SECRET="$(openssl rand -hex 32)"
+    export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
+    
+    # Use Python to check the effective runtime configuration
+    local runtime_check
+    runtime_check=$(python3 << EOF
+import sys
+sys.path.insert(0, '.')
+
+# Initialize settings the same way the server will
+from searx import settings, init_settings
+init_settings()
+
+print('Effective runtime configuration:')
+print(f'  formats = {settings.get("search", {}).get("formats", [])}')
+print(f'  bind_address = {settings.get("server", {}).get("bind_address", "NOT SET")}')
+print(f'  port = {settings.get("server", {}).get("port", "NOT SET")}')
+print(f'  method = {settings.get("server", {}).get("method", "NOT SET")}')
+
+# Verify critical settings
+formats = settings.get('search', {}).get('formats', [])
+bind_addr = settings.get('server', {}).get('bind_address', '')
+
+if 'json' not in formats:
+    print("ERROR: JSON not in effective formats")
+    sys.exit(1)
+
+if bind_addr != '0.0.0.0':
+    print(f"ERROR: Effective bind_address is '{bind_addr}', expected '0.0.0.0'")
+    sys.exit(1)
+
+print("\\nRuntime configuration VERIFIED")
+EOF
+    )
+    
+    echo "${runtime_check}"
+    
+    if [ $? -ne 0 ]; then
+        log_error "Runtime configuration verification failed"
+        deactivate
+        exit 1
+    fi
+    
+    deactivate
+    log_success "Runtime configuration verified"
+}
+
+# ============================================================================
 # START SEARXNG
 # ============================================================================
 start_searxng() {
     cd "${REPO_DIR}"
     
     log_info "Starting SearXNG on port ${SEARXNG_PORT}..."
-    log_info "Binding to 0.0.0.0 for external access"
-    log_info "Configuration: settings.yml"
+    log_info "Using settings file: ${SETTINGS_FILE}"
     echo ""
     
     # Activate virtual environment
     source "${VENV_NAME}/bin/activate"
     
-    # Set environment variables for SearXNG
+    # CRITICAL: Set SEARXNG_SETTINGS_PATH to point to our custom settings.yml
+    # This is the official SearXNG mechanism for specifying a custom settings file
+    # See: searx/settings_loader.py - the SEARXNG_SETTINGS_PATH environment variable
+    # When set to a file path, it loads that file and merges with defaults
+    # (because our settings.yml has use_default_settings: true)
+    export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
+    
+    # Set other environment variables
     export SEARXNG_PORT="${SEARXNG_PORT}"
     export SEARXNG_BIND_ADDRESS="0.0.0.0"
     export SEARXNG_DEBUG="false"
-    export SEARXNG_SECRET="atis-nora-test-secret-key-2026"
+    # Set secret via environment variable (not in git)
+    export SEARXNG_SECRET="$(openssl rand -hex 32)"
     
     # Add current directory to Python path so it can find the searx package
-    # and the version_frozen.py file
     export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
     
-    # Start SearXNG with custom settings
-    # The searxng-run command will look for settings.yml in the current directory
-    log_success "Starting SearXNG server..."
+    log_success "Starting SearXNG server with custom configuration..."
     echo ""
+    echo "Settings file: ${SETTINGS_FILE}"
     echo "Local endpoint: http://127.0.0.1:${SEARXNG_PORT}/"
     echo "External endpoint: http://0.0.0.0:${SEARXNG_PORT}/"
     echo ""
@@ -113,8 +253,7 @@ start_searxng() {
     echo ""
     
     # Run SearXNG using the webapp module directly
-    # This ensures it uses our local searx directory with version_frozen.py
-    exec python -m searx.webapp run
+    exec python3 -m searx.webapp run
 }
 
 # ============================================================================
@@ -129,6 +268,8 @@ main() {
     
     validate_environment
     detect_codespaces_port
+    validate_configuration
+    verify_runtime_config
     start_searxng
 }
 

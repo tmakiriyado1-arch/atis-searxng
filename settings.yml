@@ -5,6 +5,10 @@
 # ============================================================================
 # GENERAL SETTINGS
 # ============================================================================
+# Use default settings and merge with our customizations
+# This tells SearXNG to merge our settings with the defaults rather than replace them
+use_default_settings: true
+
 general:
   debug: false
   instance_name: "ATIS SearXNG Test"
@@ -59,7 +63,9 @@ server:
   # No authentication required for this test instance
   limiter: false
   public_instance: false
-  secret_key: "atis-nora-test-secret-key-2026"
+  # secret_key must be set via SEARXNG_SECRET environment variable
+  # DO NOT commit secret keys to git
+  secret_key: ""
   image_proxy: false
   http_protocol_version: "1.1"
   
@@ -175,6 +181,7 @@ engines:
   # Qwant - general web search, no API key required
   - name: qwant
     engine: qwant
+    qwant_categ: web
     shortcut: qw
     categories: [general, web]
     weight: 1
