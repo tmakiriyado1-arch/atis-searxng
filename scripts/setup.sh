@@ -1,0 +1,308 @@
+#!/bin/bash
+# SearXNG Setup Script for ATIS/NORA Test Server
+# Native Python installation for GitHub Codespaces
+# https://github.com/searxng/searxng
+
+set -euo pipefail
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+SEARXNG_REPO="https://github.com/searxng/searxng.git"
+PYTHON_VERSION_REQUIRED="3.10"
+VENV_NAME=".venv"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SEARXNG_SOURCE_DIR="/tmp/searxng-source"
+
+# ============================================================================
+# COLORS FOR OUTPUT
+# ============================================================================
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# ============================================================================
+# LOGGING FUNCTIONS
+# ============================================================================
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# ============================================================================
+# PREREQUISITE CHECKS
+# ============================================================================
+check_python_version() {
+    log_info "Checking Python version..."
+    
+    if ! command -v python3 &> /dev/null; then
+        log_error "Python3 is not installed. Please install Python 3.10 or higher."
+        exit 1
+    fi
+    
+    PYTHON_VERSION=$(python3 --version 2>&1 | grep -oP '\d+\.\d+\.\d+' | head -1)
+    log_info "Detected Python version: ${PYTHON_VERSION}"
+    
+    # Compare versions using Python to avoid shell version comparison issues
+    if ! python3 -c "
+import sys
+from packaging import version
+required = version.parse('${PYTHON_VERSION_REQUIRED}')
+current = version.parse('${PYTHON_VERSION}')
+sys.exit(0 if current >= required else 1)
+" 2>/dev/null; then
+        log_error "Python ${PYTHON_VERSION_REQUIRED} or higher is required. Found: ${PYTHON_VERSION}"
+        exit 1
+    fi
+    
+    log_success "Python version check passed"
+}
+
+check_pip() {
+    log_info "Checking pip..."
+    if ! command -v pip3 &> /dev/null; then
+        log_error "pip3 is not available. Please ensure pip is installed."
+        exit 1
+    fi
+    log_success "pip is available"
+}
+
+check_git() {
+    log_info "Checking git..."
+    if ! command -v git &> /dev/null; then
+        log_error "git is not installed. Please install git."
+        exit 1
+    fi
+    log_success "git is available"
+}
+
+# ============================================================================
+# CLONE SEARXNG SOURCE
+# ============================================================================
+clone_searxng() {
+    log_info "Cloning SearXNG source repository..."
+    
+    if [ -d "${SEARXNG_SOURCE_DIR}" ]; then
+        log_info "SearXNG source already exists, skipping clone"
+        return 0
+    fi
+    
+    if ! git clone --depth 1 ${SEARXNG_REPO} ${SEARXNG_SOURCE_DIR} 2>&1; then
+        log_error "Failed to clone SearXNG repository"
+        exit 1
+    fi
+    
+    log_success "SearXNG source cloned"
+}
+
+# ============================================================================
+# VIRTUAL ENVIRONMENT SETUP
+# ============================================================================
+create_venv() {
+    log_info "Creating Python virtual environment..."
+    
+    cd "${REPO_DIR}"
+    
+    if [ -d "${VENV_NAME}" ]; then
+        log_warning "Virtual environment already exists. Removing and recreating..."
+        rm -rf "${VENV_NAME}"
+    fi
+    
+    if ! python3 -m venv "${VENV_NAME}"; then
+        log_error "Failed to create virtual environment"
+        exit 1
+    fi
+    
+    log_success "Virtual environment created"
+}
+
+# ============================================================================
+# INSTALL PACKAGES
+# ============================================================================
+install_packages() {
+    log_info "Installing packages..."
+    
+    cd "${REPO_DIR}"
+    
+    # Activate virtual environment
+    source "${VENV_NAME}/bin/activate"
+    
+    # Install packaging for version comparison
+    log_info "Installing packaging..."
+    if ! pip install packaging; then
+        log_error "Failed to install packaging"
+        exit 1
+    fi
+    
+    # Install setuptools
+    log_info "Installing setuptools..."
+    if ! pip install setuptools; then
+        log_error "Failed to install setuptools"
+        exit 1
+    fi
+    
+    # Install SearXNG dependencies from requirements.txt
+    log_info "Installing SearXNG dependencies..."
+    if ! pip install -r ${SEARXNG_SOURCE_DIR}/requirements.txt; then
+        log_error "Failed to install SearXNG dependencies"
+        deactivate
+        exit 1
+    fi
+    
+    # Install SearXNG in editable mode from source
+    log_info "Installing SearXNG from source..."
+    if ! pip install --no-build-isolation -e ${SEARXNG_SOURCE_DIR}; then
+        log_error "Failed to install SearXNG from source"
+        deactivate
+        exit 1
+    fi
+    
+    log_success "SearXNG installed successfully"
+    
+    deactivate
+    log_success "Package installation complete"
+}
+
+# ============================================================================
+# COPY SEARXNG SOURCE TO REPO
+# ============================================================================
+copy_searxng_source() {
+    log_info "Copying SearXNG source to repository..."
+    
+    cd "${REPO_DIR}"
+    
+    # Remove existing searx directory if it exists
+    if [ -d "searx" ]; then
+        rm -rf "searx"
+    fi
+    
+    # Copy searx directory from source
+    if ! cp -r ${SEARXNG_SOURCE_DIR}/searx .; then
+        log_error "Failed to copy SearXNG source"
+        exit 1
+    fi
+    
+    # Create version_frozen.py to avoid git dependency issues
+    cat > searx/version_frozen.py << 'EOF'
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# pylint: disable=missing-module-docstring
+# this file is generated automatically by searx/version.py
+
+VERSION_STRING = "2026.9.25"
+VERSION_TAG = "2026.9.25"
+DOCKER_TAG = "2026.9.25"
+GIT_URL = "https://github.com/searxng/searxng"
+GIT_BRANCH = "master"
+EOF
+    
+    log_success "SearXNG source copied and version_frozen.py created"
+}
+
+# ============================================================================
+# CONFIGURATION SETUP
+# ============================================================================
+setup_configuration() {
+    log_info "Setting up configuration..."
+    
+    cd "${REPO_DIR}"
+    
+    # Check if settings.yml exists
+    if [ ! -f "settings.yml" ]; then
+        log_error "settings.yml not found in repository root"
+        exit 1
+    fi
+    
+    # Validate YAML syntax
+    if ! python3 -c "import yaml; yaml.safe_load(open('settings.yml'))" 2>/dev/null; then
+        log_error "Invalid YAML in settings.yml"
+        exit 1
+    fi
+    
+    log_success "Configuration validated"
+}
+
+# ============================================================================
+# FINAL VERIFICATION
+# ============================================================================
+final_verification() {
+    log_info "Performing final verification..."
+    
+    cd "${REPO_DIR}"
+    
+    # Check virtual environment
+    if [ ! -d "${VENV_NAME}" ]; then
+        log_error "Virtual environment not found"
+        exit 1
+    fi
+    
+    # Check settings file
+    if [ ! -f "settings.yml" ]; then
+        log_error "settings.yml not found"
+        exit 1
+    fi
+    
+    # Check searx directory
+    if [ ! -d "searx" ]; then
+        log_error "searx directory not found"
+        exit 1
+    fi
+    
+    # Check scripts directory
+    if [ ! -d "scripts" ]; then
+        log_error "scripts directory not found"
+        exit 1
+    fi
+    
+    log_success "All components verified"
+}
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+main() {
+    echo ""
+    echo "============================================================================"
+    echo "  SearXNG Setup for ATIS/NORA Test Server"
+    echo "============================================================================"
+    echo ""
+    
+    check_python_version
+    check_pip
+    check_git
+    clone_searxng
+    create_venv
+    install_packages
+    copy_searxng_source
+    setup_configuration
+    final_verification
+    
+    echo ""
+    echo "============================================================================"
+    echo "  SETUP COMPLETE"
+    echo "============================================================================"
+    echo ""
+    echo "To start SearXNG, run:"
+    echo "  ./scripts/start.sh"
+    echo ""
+    echo "To test the installation, run:"
+    echo "  ./scripts/test.sh"
+    echo ""
+    echo "Repository directory: ${REPO_DIR}"
+    echo ""
+}
+
+# Run main function
+main "$@"

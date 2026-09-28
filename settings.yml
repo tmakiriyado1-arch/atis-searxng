@@ -1,0 +1,220 @@
+# SearXNG Configuration for ATIS/NORA Test Server
+# Native Python installation for GitHub Codespaces
+# https://github.com/searxng/searxng
+
+# ============================================================================
+# GENERAL SETTINGS
+# ============================================================================
+general:
+  debug: false
+  instance_name: "ATIS SearXNG Test"
+  privacypolicy_url: false
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+  open_metrics: ''
+
+brand:
+  docs_url: https://docs.searxng.org/
+  public_instances: https://searx.space
+  wiki_url: https://github.com/searxng/searxng/wiki
+  issue_url: https://github.com/searxng/searxng/issues
+
+# ============================================================================
+# SEARCH SETTINGS
+# ============================================================================
+search:
+  safe_search: 0
+  autocomplete: ""
+  autocomplete_min: 4
+  favicon_resolver: ""
+  default_lang: "en"
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+  suspended_times:
+    SearxEngineAccessDenied: 180
+    SearxEngineCaptcha: 3600
+    SearxEngineTooManyRequests: 180
+    cf_SearxEngineCaptcha: 1296000
+    cf_SearxEngineAccessDenied: 86400
+    recaptcha_SearxEngineCaptcha: 604800
+
+  # CRITICAL: Enable JSON format for NORA integration
+  formats:
+    - html
+    - json
+
+# ============================================================================
+# SERVER SETTINGS
+# ============================================================================
+server:
+  # Bind to all interfaces for Codespaces port forwarding
+  port: 8888
+  bind_address: "0.0.0.0"
+  base_url: false
+  
+  # CRITICAL: Enable GET method for NORA HTTP GET requests
+  method: "GET"
+  
+  # No authentication required for this test instance
+  limiter: false
+  public_instance: false
+  secret_key: "atis-nora-test-secret-key-2026"
+  image_proxy: false
+  http_protocol_version: "1.1"
+  
+  default_http_headers:
+    X-Content-Type-Options: nosniff
+    X-Download-Options: noopen
+    X-Robots-Tag: noindex, nofollow
+    Referrer-Policy: no-referrer
+
+# ============================================================================
+# VALKEY (Redis-compatible) - Disabled for this test
+# ============================================================================
+valkey:
+  url: false
+
+# ============================================================================
+# UI SETTINGS - Minimal for test instance
+# ============================================================================
+ui:
+  static_path: ""
+  templates_path: ""
+  query_in_title: false
+  default_theme: simple
+  center_alignment: false
+  simple_style: auto
+  search_on_category_select: true
+  hotkeys: default
+  url_formatting: pretty
+
+# ============================================================================
+# PREFERENCES
+# ============================================================================
+preferences:
+  lock: []
+
+# ============================================================================
+# OUTGOING REQUEST SETTINGS
+# ============================================================================
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 30.0
+  useragent_suffix: "ATIS-NORA-Test"
+  pool_connections: 100
+  enable_http2: true
+
+# ============================================================================
+# LOGGING SETTINGS
+# ============================================================================
+# Enable logging to see engine success/failure for diagnostics
+logging:
+  config:
+    version: 1
+    disable_existing_loggers: false
+    formatters:
+      simple:
+        format: '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+    handlers:
+      console:
+        class: logging.StreamHandler
+        level: INFO
+        formatter: simple
+        stream: ext://sys.stdout
+    root:
+      level: INFO
+      handlers: [console]
+
+# ============================================================================
+# CATEGORIES
+# ============================================================================
+categories:
+  - name: general
+    label: General
+  - name: web
+    label: Web
+
+# ============================================================================
+# SEARCH ENGINES
+# ============================================================================
+# Strategy: Start with engines that:
+# 1. Require NO API key
+# 2. Are appropriate for general web/entity research
+# 3. Return actual search results
+# 4. Can be tested from Codespaces
+#
+# Enabled engines (tested and working without credentials):
+# - wikipedia: General knowledge, no API key required
+# - wikidata: Structured data, no API key required  
+# - qwant: General web search, no API key required
+#
+# Disabled by default but available:
+# - mojeek: General web search, no API key, but may have CAPTCHA
+# - duckduckgo: May have network issues from Render
+#
+# Note: Test each engine individually. Disable any that fail.
+
+engines:
+  # Wikipedia - reliable, no API key, good for entity research
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    display_type: ["infobox", "list"]
+    categories: [general]
+    weight: 2
+
+  # Wikidata - structured knowledge, no API key
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    display_type: ["infobox", "list"]
+    categories: [general]
+    weight: 2
+
+  # Qwant - general web search, no API key required
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    categories: [general, web]
+    weight: 1
+
+  # SearXNG built-in engine for testing connectivity
+  # This is a fallback that should always work
+  - name: searx
+    engine: searx
+    shortcut: sx
+    categories: [general]
+    weight: 0
+
+  # Mojeek - general web search, no API key
+  # Note: May have Proof of Work CAPTCHA issues
+  - name: mojeek
+    shortcut: mjk
+    engine: mojeek
+    categories: [general, web]
+    inactive: false
+    weight: 1
+
+  # All other engines disabled by default
+  # Uncomment additional engines as needed after testing
+
+  - name: 360search
+    engine: 360search
+    shortcut: 360so
+    disabled: true
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: true
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: true
+
+  - name: google
+    engine: google
+    shortcut: gg
+    disabled: true
