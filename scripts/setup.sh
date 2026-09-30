@@ -13,7 +13,6 @@ PYTHON_VERSION_REQUIRED="3.10"
 VENV_NAME=".venv"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SEARXNG_SOURCE_DIR="/tmp/searxng-source"
-SEARXNG_INSTALL_DIR="/tmp/searxng"
 
 # Detect if running on Render (read-only filesystem)
 ON_RENDER=false
@@ -120,9 +119,9 @@ clone_searxng() {
 # SETUP FOR RENDER (READ-ONLY FILESYSTEM)
 # On Render, we:
 # 1. Install all dependencies from requirements.txt
-# 2. Copy searx source to /tmp/searxng (writable, persistent location)
+# 2. Copy searx source to REPO_DIR (project directory is writable during build)
 # 3. Create version_frozen.py
-# We do NOT use pip install for searxng itself - we run from source
+# We run searx directly from the project directory
 # ============================================================================
 setup_for_render() {
     log_info "Render environment detected, setting up for read-only filesystem..."
@@ -134,18 +133,23 @@ setup_for_render() {
         exit 1
     fi
     
-    # Copy searx source to /tmp/searxng (writable and persistent on Render)
-    log_info "Copying SearXNG source to ${SEARXNG_INSTALL_DIR}..."
-    if [ -d "${SEARXNG_INSTALL_DIR}" ]; then
-        rm -rf "${SEARXNG_INSTALL_DIR}"
+    # Copy searx source to REPO_DIR
+    # During build phase on Render, project directory is writable
+    log_info "Copying SearXNG source to ${REPO_DIR}/searx..."
+    cd "${REPO_DIR}"
+    
+    if [ -d "searx" ]; then
+        log_warning "searx directory already exists, removing..."
+        rm -rf "searx"
     fi
-    if ! cp -r ${SEARXNG_SOURCE_DIR}/searx "${SEARXNG_INSTALL_DIR}"; then
-        log_error "Failed to copy SearXNG source to ${SEARXNG_INSTALL_DIR}"
+    
+    if ! cp -r ${SEARXNG_SOURCE_DIR}/searx .; then
+        log_error "Failed to copy SearXNG source to ${REPO_DIR}/searx"
         exit 1
     fi
     
     # Create version_frozen.py to avoid git dependency issues
-    cat > ${SEARXNG_INSTALL_DIR}/version_frozen.py << 'EOF'
+    cat > searx/version_frozen.py << 'EOF'
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # pylint: disable=missing-module-docstring
 # this file is generated automatically by searx/version.py
@@ -157,7 +161,7 @@ GIT_URL = "https://github.com/searxng/searxng"
 GIT_BRANCH = "master"
 EOF
     
-    log_success "Render setup complete - dependencies installed, source in ${SEARXNG_INSTALL_DIR}"
+    log_success "Render setup complete - dependencies installed, source in ${REPO_DIR}/searx"
 }
 
 # ============================================================================
@@ -348,14 +352,14 @@ final_verification() {
     
     cd "${REPO_DIR}"
     
-    # On Render, check /tmp/searxng exists
+    # On Render, check searx directory exists in project
     if [ "$ON_RENDER" = "true" ]; then
-        if [ ! -d "${SEARXNG_INSTALL_DIR}" ]; then
-            log_error "${SEARXNG_INSTALL_DIR} directory not found"
+        if [ ! -d "searx" ]; then
+            log_error "searx directory not found in project"
             exit 1
         fi
-        if [ ! -f "${SEARXNG_INSTALL_DIR}/version_frozen.py" ]; then
-            log_error "${SEARXNG_INSTALL_DIR}/version_frozen.py not found"
+        if [ ! -f "searx/version_frozen.py" ]; then
+            log_error "searx/version_frozen.py not found"
             exit 1
         fi
         log_success "Render verification passed"
