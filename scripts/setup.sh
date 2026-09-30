@@ -117,47 +117,31 @@ clone_searxng() {
 
 # ============================================================================
 # SETUP FOR RENDER (READ-ONLY FILESYSTEM)
-# On Render, we need to:
-# 1. Install dependencies
-# 2. Copy searx source to /tmp/searx (writable location)
-# 3. Create version_frozen.py
-# 4. Set SEARXNG_SETTINGS_PATH to our settings.yml
-# We CANNOT use pip install -e because it tries to load /etc/searxng/settings.yml
+# On Render, install searxng as a regular package (not editable)
+# This installs to site-packages which is persistent
 # ============================================================================
 setup_for_render() {
-    log_info "Render environment detected, setting up for read-only filesystem..."
+    log_info "Render environment detected, installing SearXNG as regular package..."
     
-    # Install dependencies from requirements.txt
+    # Set SEARXNG_SETTINGS_PATH to avoid /etc/searxng/settings.yml error during install
+    export SEARXNG_SETTINGS_PATH="${REPO_DIR}/settings.yml"
+    
+    # Install dependencies from requirements.txt first
     log_info "Installing SearXNG dependencies..."
     if ! pip install -r ${SEARXNG_SOURCE_DIR}/requirements.txt; then
         log_error "Failed to install SearXNG dependencies"
         exit 1
     fi
     
-    # Copy searx source to /tmp (writable location)
-    log_info "Copying SearXNG source to /tmp/searx..."
-    if [ -d "/tmp/searx" ]; then
-        rm -rf "/tmp/searx"
-    fi
-    if ! cp -r ${SEARXNG_SOURCE_DIR}/searx /tmp/searx; then
-        log_error "Failed to copy SearXNG source to /tmp"
+    # Install searxng as a regular package (not editable)
+    # This installs to site-packages, which is persistent on Render
+    log_info "Installing SearXNG as regular package..."
+    if ! pip install ${SEARXNG_SOURCE_DIR}; then
+        log_error "Failed to install SearXNG"
         exit 1
     fi
     
-    # Create version_frozen.py to avoid git dependency issues
-    cat > /tmp/searx/version_frozen.py << 'EOF'
-# SPDX-License-Identifier: AGPL-3.0-or-later
-# pylint: disable=missing-module-docstring
-# this file is generated automatically by searx/version.py
-
-VERSION_STRING = "2026.9.25"
-VERSION_TAG = "2026.9.25"
-DOCKER_TAG = "2026.9.25"
-GIT_URL = "https://github.com/searxng/searxng"
-GIT_BRANCH = "master"
-EOF
-    
-    log_success "Render setup complete - SearXNG dependencies installed, source in /tmp/searx"
+    log_success "Render setup complete - SearXNG installed to site-packages"
 }
 
 # ============================================================================
@@ -348,13 +332,13 @@ final_verification() {
     
     cd "${REPO_DIR}"
     
-    # On Render, check /tmp/searx exists instead of project searx
+    # On Render, just verify searx is importable
     if [ "$ON_RENDER" = "true" ]; then
-        if [ ! -d "/tmp/searx" ]; then
-            log_error "/tmp/searx directory not found"
+        if ! python3 -c "import searx; print('SearXNG is installed')" 2>/dev/null; then
+            log_error "SearXNG is not installed"
             exit 1
         fi
-        log_success "Render verification passed"
+        log_success "Render verification passed - SearXNG is importable"
         return 0
     fi
     
