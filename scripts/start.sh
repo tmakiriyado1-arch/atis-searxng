@@ -58,7 +58,7 @@ validate_environment() {
     
     cd "${REPO_DIR}"
     
-    # On Render, we don't have a venv, we use system Python with --user packages
+    # On Render, we don't have a .venv, we use the system/pre-installed environment
     if [ "$ON_RENDER" = "true" ]; then
         log_info "Render environment detected, skipping venv check"
         
@@ -114,9 +114,8 @@ validate_configuration() {
     
     cd "${REPO_DIR}"
     
-    # On Render, we use system Python directly
+    # On Render, use system python3 directly (already in a venv provided by Render)
     if [ "$ON_RENDER" = "true" ]; then
-        # Use system python3 directly
         local validation_output
         validation_output=$(python3 << EOF
 import yaml
@@ -251,11 +250,11 @@ verify_runtime_config() {
     
     cd "${REPO_DIR}"
     
-    # On Render, use system Python directly
+    # On Render, use system Python directly (already in Render's venv)
     if [ "$ON_RENDER" = "true" ]; then
         # Set the same environment variables that will be used for the server
         export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
-        export SEARXNG_SECRET="$(openssl rand -hex 32)"
+        export SEARXNG_SECRET="${SEARXNG_SECRET:-$(openssl rand -hex 32)}"
         export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
         
         # Use Python to check the effective runtime configuration
@@ -309,7 +308,7 @@ EOF
     
     # Set the same environment variables that will be used for the server
     export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
-    export SEARXNG_SECRET="$(openssl rand -hex 32)"
+    export SEARXNG_SECRET="${SEARXNG_SECRET:-$(openssl rand -hex 32)}"
     export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
     
     # Use Python to check the effective runtime configuration
@@ -366,9 +365,8 @@ start_searxng() {
     log_info "Using settings file: ${SETTINGS_FILE}"
     echo ""
     
-    # On Render, use system Python directly with --user installed packages
+    # On Render, use the pre-installed environment directly
     if [ "$ON_RENDER" = "true" ]; then
-        # Set environment variables for system Python
         export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
         export SEARXNG_PORT="${SEARXNG_PORT}"
         export SEARXNG_BIND_ADDRESS="0.0.0.0"
@@ -376,11 +374,7 @@ start_searxng() {
         export SEARXNG_SECRET="${SEARXNG_SECRET:-$(openssl rand -hex 32)}"
         export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
         
-        # Add user site-packages to PYTHONPATH
-        PYTHON_USER_SITE=$(python3 -c "import site; print(site.getusersitepackages())")
-        export PYTHONPATH="${PYTHON_USER_SITE}:${PYTHONPATH:-}"
-        
-        log_success "Starting SearXNG server on Render with system Python..."
+        log_success "Starting SearXNG server on Render..."
         echo ""
         echo "Settings file: ${SETTINGS_FILE}"
         echo "Local endpoint: http://127.0.0.1:${SEARXNG_PORT}/"
@@ -391,7 +385,7 @@ start_searxng() {
         echo "Press Ctrl+C to stop the server"
         echo ""
         
-        # Run SearXNG using the webapp module directly with system Python
+        # Run SearXNG using the webapp module directly
         exec python3 -m searx.webapp run
     fi
     
@@ -399,17 +393,12 @@ start_searxng() {
     source "${VENV_NAME}/bin/activate"
     
     # CRITICAL: Set SEARXNG_SETTINGS_PATH to point to our custom settings.yml
-    # This is the official SearXNG mechanism for specifying a custom settings file
-    # See: searx/settings_loader.py - the SEARXNG_SETTINGS_PATH environment variable
-    # When set to a file path, it loads that file and merges with defaults
-    # (because our settings.yml has use_default_settings: true)
     export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
     
     # Set other environment variables
     export SEARXNG_PORT="${SEARXNG_PORT}"
     export SEARXNG_BIND_ADDRESS="0.0.0.0"
     export SEARXNG_DEBUG="false"
-    # Set secret via environment variable (not in git)
     export SEARXNG_SECRET="${SEARXNG_SECRET:-$(openssl rand -hex 32)}"
     
     # Add current directory to Python path so it can find the searx package
