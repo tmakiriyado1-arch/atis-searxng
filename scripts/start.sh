@@ -13,6 +13,15 @@ VENV_NAME=".venv"
 SEARXNG_PORT="${SEARXNG_PORT:-8888}"
 SETTINGS_FILE="${REPO_DIR}/settings.yml"
 
+# Detect if running on Render (read-only filesystem)
+ON_RENDER=false
+if [ -f "/etc/render" ] || [ -d "/opt/render" ]; then
+    ON_RENDER=true
+fi
+if [ -z "${RENDER:-}" ] && [ "$ON_RENDER" = "true" ]; then
+    ON_RENDER=true
+fi
+
 # ============================================================================
 # COLORS FOR OUTPUT
 # ============================================================================
@@ -48,6 +57,26 @@ validate_environment() {
     log_info "Validating environment..."
     
     cd "${REPO_DIR}"
+    
+    # On Render, we don't have a venv, we use system Python with --user packages
+    if [ "$ON_RENDER" = "true" ]; then
+        log_info "Render environment detected, skipping venv check"
+        
+        # Check settings file exists
+        if [ ! -f "${SETTINGS_FILE}" ]; then
+            log_error "settings.yml not found at ${SETTINGS_FILE}"
+            exit 1
+        fi
+        
+        # Check Python is available
+        if ! command -v python3 &> /dev/null; then
+            log_error "python3 not found"
+            exit 1
+        fi
+        
+        log_success "Render environment validated"
+        return 0
+    fi
     
     # Check virtual environment exists
     if [ ! -d "${VENV_NAME}" ]; then
@@ -85,7 +114,70 @@ validate_configuration() {
     
     cd "${REPO_DIR}"
     
-    # Activate virtual environment to use Python
+    # On Render, we use system Python directly
+    if [ "$ON_RENDER" = "true" ]; then
+        # Use system python3 directly
+        local validation_output
+        validation_output=$(python3 << EOF
+import yaml
+import sys
+
+try:
+    with open('${SETTINGS_FILE}', 'r') as f:
+        config = yaml.safe_load(f)
+    
+    if config is None:
+        print("ERROR: settings.yml is empty")
+        sys.exit(1)
+    
+    # Check search formats
+    formats = config.get('search', {}).get('formats', [])
+    if 'json' not in formats:
+        print("ERROR: JSON format not enabled in search.formats")
+        sys.exit(1)
+    else:
+        print(f"OK: JSON format enabled, formats = {formats}")
+    
+    # Check server settings
+    server = config.get('server', {})
+    
+    bind_addr = server.get('bind_address', 'NOT SET')
+    if bind_addr != '0.0.0.0':
+        print(f"ERROR: bind_address is '{bind_addr}', expected '0.0.0.0'")
+        sys.exit(1)
+    else:
+        print(f"OK: bind_address = '{bind_addr}'")
+    
+    port = server.get('port', 'NOT SET')
+    print(f"OK: port = {port}")
+    
+    method = server.get('method', 'NOT SET')
+    if method != 'GET':
+        print(f"ERROR: method is '{method}', expected 'GET'")
+        sys.exit(1)
+    else:
+        print(f"OK: method = '{method}'")
+    
+    print("\\nConfiguration validation PASSED")
+    
+except Exception as e:
+    print(f"ERROR: {e}")
+    sys.exit(1)
+EOF
+        )
+        
+        echo "${validation_output}"
+        
+        if [ $? -ne 0 ]; then
+            log_error "Configuration validation failed"
+            exit 1
+        fi
+        
+        log_success "Configuration validated"
+        return 0
+    fi
+    
+    # Non-Render: Activate virtual environment to use Python
     source "${VENV_NAME}/bin/activate"
     
     # Use Python to validate the YAML and check key settings
@@ -159,7 +251,60 @@ verify_runtime_config() {
     
     cd "${REPO_DIR}"
     
-    # Activate virtual environment
+    # On Render, use system Python directly
+    if [ "$ON_RENDER" = "true" ]; then
+        # Set the same environment variables that will be used for the server
+        export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
+        export SEARXNG_SECRET="$(openssl rand -hex 32)"
+        export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
+        
+        # Use Python to check the effective runtime configuration
+        local runtime_check
+        runtime_check=$(python3 << EOF
+import sys
+import os
+
+# Set SEARXNG_SETTINGS_PATH before importing searx
+os.environ['SEARXNG_SETTINGS_PATH'] = '${SETTINGS_FILE}'
+
+# Initialize settings the same way the server will
+from searx import settings, init_settings
+init_settings()
+
+print('Effective runtime configuration:')
+print(f'  formats = {settings.get("search", {}).get("formats", [])}')
+print(f'  bind_address = {settings.get("server", {}).get("bind_address", "NOT SET")}')
+print(f'  port = {settings.get("server", {}).get("port", "NOT SET")}')
+print(f'  method = {settings.get("server", {}).get("method", "NOT SET")}')
+
+# Verify critical settings
+formats = settings.get('search', {}).get('formats', [])
+bind_addr = settings.get('server', {}).get('bind_address', '')
+
+if 'json' not in formats:
+    print("ERROR: JSON not in effective formats")
+    sys.exit(1)
+
+if bind_addr != '0.0.0.0':
+    print(f"ERROR: Effective bind_address is '{bind_addr}', expected '0.0.0.0'")
+    sys.exit(1)
+
+print("\\nRuntime configuration VERIFIED")
+EOF
+        )
+        
+        echo "${runtime_check}"
+        
+        if [ $? -ne 0 ]; then
+            log_error "Runtime configuration verification failed"
+            exit 1
+        fi
+        
+        log_success "Runtime configuration verified"
+        return 0
+    fi
+    
+    # Non-Render: Activate virtual environment
     source "${VENV_NAME}/bin/activate"
     
     # Set the same environment variables that will be used for the server
@@ -221,7 +366,36 @@ start_searxng() {
     log_info "Using settings file: ${SETTINGS_FILE}"
     echo ""
     
-    # Activate virtual environment
+    # On Render, use system Python directly with --user installed packages
+    if [ "$ON_RENDER" = "true" ]; then
+        # Set environment variables for system Python
+        export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
+        export SEARXNG_PORT="${SEARXNG_PORT}"
+        export SEARXNG_BIND_ADDRESS="0.0.0.0"
+        export SEARXNG_DEBUG="false"
+        export SEARXNG_SECRET="${SEARXNG_SECRET:-$(openssl rand -hex 32)}"
+        export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
+        
+        # Add user site-packages to PYTHONPATH
+        PYTHON_USER_SITE=$(python3 -c "import site; print(site.getusersitepackages())")
+        export PYTHONPATH="${PYTHON_USER_SITE}:${PYTHONPATH:-}"
+        
+        log_success "Starting SearXNG server on Render with system Python..."
+        echo ""
+        echo "Settings file: ${SETTINGS_FILE}"
+        echo "Local endpoint: http://127.0.0.1:${SEARXNG_PORT}/"
+        echo "External endpoint: http://0.0.0.0:${SEARXNG_PORT}/"
+        echo ""
+        echo "JSON API test: http://127.0.0.1:${SEARXNG_PORT}/search?q=African%20Development%20Bank&format=json"
+        echo ""
+        echo "Press Ctrl+C to stop the server"
+        echo ""
+        
+        # Run SearXNG using the webapp module directly with system Python
+        exec python3 -m searx.webapp run
+    fi
+    
+    # Non-Render: Activate virtual environment
     source "${VENV_NAME}/bin/activate"
     
     # CRITICAL: Set SEARXNG_SETTINGS_PATH to point to our custom settings.yml
@@ -236,7 +410,7 @@ start_searxng() {
     export SEARXNG_BIND_ADDRESS="0.0.0.0"
     export SEARXNG_DEBUG="false"
     # Set secret via environment variable (not in git)
-    export SEARXNG_SECRET="$(openssl rand -hex 32)"
+    export SEARXNG_SECRET="${SEARXNG_SECRET:-$(openssl rand -hex 32)}"
     
     # Add current directory to Python path so it can find the searx package
     export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"

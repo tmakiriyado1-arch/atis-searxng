@@ -14,6 +14,15 @@ VENV_NAME=".venv"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SEARXNG_SOURCE_DIR="/tmp/searxng-source"
 
+# Detect if running on Render (read-only filesystem)
+ON_RENDER=false
+if [ -f "/etc/render" ] || [ -d "/opt/render" ]; then
+    ON_RENDER=true
+fi
+if [ -z "${RENDER:-}" ] && [ "$ON_RENDER" = "true" ]; then
+    ON_RENDER=true
+fi
+
 # ============================================================================
 # COLORS FOR OUTPUT
 # ============================================================================
@@ -57,7 +66,6 @@ check_python_version() {
     log_info "Detected Python version: ${PYTHON_VERSION}"
     
     # Simple numeric comparison without external dependencies
-    # Extract major and minor version numbers
     PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
     PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
     
@@ -108,7 +116,61 @@ clone_searxng() {
 }
 
 # ============================================================================
-# VIRTUAL ENVIRONMENT SETUP
+# SETUP FOR RENDER (READ-ONLY FILESYSTEM)
+# ============================================================================
+setup_for_render() {
+    log_info "Render environment detected, using system Python with --user install..."
+    
+    # On Render, we cannot create a venv or write to project directory
+    # We install everything to the user's home directory using --user flag
+    
+    # Install packaging for version comparison
+    log_info "Installing packaging..."
+    if ! pip3 install --user packaging; then
+        log_error "Failed to install packaging"
+        exit 1
+    fi
+    
+    # Install setuptools
+    log_info "Installing setuptools..."
+    if ! pip3 install --user setuptools; then
+        log_error "Failed to install setuptools"
+        exit 1
+    fi
+    
+    # Install SearXNG dependencies from requirements.txt
+    log_info "Installing SearXNG dependencies..."
+    if ! pip3 install --user -r ${SEARXNG_SOURCE_DIR}/requirements.txt; then
+        log_error "Failed to install SearXNG dependencies"
+        exit 1
+    fi
+    
+    # Install SearXNG in editable mode from source using --user
+    log_info "Installing SearXNG from source..."
+    if ! pip3 install --user --no-build-isolation -e ${SEARXNG_SOURCE_DIR}; then
+        log_error "Failed to install SearXNG from source"
+        exit 1
+    fi
+    
+    # Create a minimal version_frozen.py in /tmp to avoid git dependency issues
+    # We'll copy it to the right place in start.sh
+    cat > /tmp/version_frozen.py << 'EOF'
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# pylint: disable=missing-module-docstring
+# this file is generated automatically by searx/version.py
+
+VERSION_STRING = "2026.9.25"
+VERSION_TAG = "2026.9.25"
+DOCKER_TAG = "2026.9.25"
+GIT_URL = "https://github.com/searxng/searxng"
+GIT_BRANCH = "master"
+EOF
+    
+    log_success "Render setup complete - SearXNG installed to user directory"
+}
+
+# ============================================================================
+# VIRTUAL ENVIRONMENT SETUP (NON-RENDER)
 # ============================================================================
 create_venv() {
     log_info "Creating Python virtual environment..."
@@ -121,48 +183,69 @@ create_venv() {
     fi
     
     # Try to create virtual environment
-    # On Render, ensurepip may not be available, so we need to install it first
     if ! python3 -m venv "${VENV_NAME}" 2>/dev/null; then
         log_warning "Failed to create venv directly, trying with ensurepip..."
         # Install ensurepip if available
         if command -v apt-get &> /dev/null; then
             log_info "Installing python3-venv package..."
-            # On Render, we can't use apt-get due to read-only filesystem
-            # Skip apt-get and fall through to manual venv creation
-            log_warning "apt-get available but filesystem may be read-only, skipping..."
-        else
-            log_info "No apt-get available"
-        fi
-        
-        # Try using the system python directly without venv
-        log_warning "Trying without venv (using system Python)..."
-        # Create a minimal venv structure manually
-        mkdir -p "${VENV_NAME}/bin"
-        ln -sf "$(which python3)" "${VENV_NAME}/bin/python3" 2>/dev/null || \
-            cp "$(which python3)" "${VENV_NAME}/bin/python3" 2>/dev/null || \
-            echo "#<! /bin/sh\nexec $(which python3) \"$@\"" > "${VENV_NAME}/bin/python3" && \
-            chmod +x "${VENV_NAME}/bin/python3"
-        ln -sf "$(which python3)" "${VENV_NAME}/bin/python" 2>/dev/null || \
-            cp "$(which python3)" "${VENV_NAME}/bin/python" 2>/dev/null || \
-            echo "#<! /bin/sh\nexec $(which python3) \"$@\"" > "${VENV_NAME}/bin/python" && \
-            chmod +x "${VENV_NAME}/bin/python"
-        # Create pip wrapper
-        echo "#<! /bin/sh\nexec $(which pip3) \"$@\"" > "${VENV_NAME}/bin/pip" && \
-        chmod +x "${VENV_NAME}/bin/pip"
-        # Create activate script
-        cat > "${VENV_NAME}/bin/activate" << 'EOF'
+            if ! apt-get update -qq && apt-get install -y -qq python3-venv 2>/dev/null; then
+                log_warning "apt-get install failed, trying without venv..."
+                # Fall back to system Python
+                mkdir -p "${VENV_NAME}/bin"
+                ln -sf "$(which python3)" "${VENV_NAME}/bin/python3" 2>/dev/null || \
+                    cp "$(which python3)" "${VENV_NAME}/bin/python3" 2>/dev/null || \
+                    echo "#<! /bin/sh\nexec $(which python3) \"$@\"" > "${VENV_NAME}/bin/python3" && \
+                    chmod +x "${VENV_NAME}/bin/python3"
+                ln -sf "$(which python3)" "${VENV_NAME}/bin/python" 2>/dev/null || \
+                    cp "$(which python3)" "${VENV_NAME}/bin/python" 2>/dev/null || \
+                    echo "#<! /bin/sh\nexec $(which python3) \"$@\"" > "${VENV_NAME}/bin/python" && \
+                    chmod +x "${VENV_NAME}/bin/python"
+                echo "#<! /bin/sh\nexec $(which pip3) \"$@\"" > "${VENV_NAME}/bin/pip" && \
+                chmod +x "${VENV_NAME}/bin/pip"
+                cat > "${VENV_NAME}/bin/activate" << 'EOF'
 #!/bin/bash
 export VIRTUAL_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="$VIRTUAL_ENV/bin:$PATH"
 EOF
-        chmod +x "${VENV_NAME}/bin/activate"
+                chmod +x "${VENV_NAME}/bin/activate"
+                log_success "Virtual environment created (fallback mode)"
+                return 0
+            fi
+        else
+            log_info "No apt-get available, trying without venv..."
+            mkdir -p "${VENV_NAME}/bin"
+            ln -sf "$(which python3)" "${VENV_NAME}/bin/python3" 2>/dev/null || \
+                cp "$(which python3)" "${VENV_NAME}/bin/python3" 2>/dev/null || \
+                echo "#<! /bin/sh\nexec $(which python3) \"$@\"" > "${VENV_NAME}/bin/python3" && \
+                chmod +x "${VENV_NAME}/bin/python3"
+            ln -sf "$(which python3)" "${VENV_NAME}/bin/python" 2>/dev/null || \
+                cp "$(which python3)" "${VENV_NAME}/bin/python" 2>/dev/null || \
+                echo "#<! /bin/sh\nexec $(which python3) \"$@\"" > "${VENV_NAME}/bin/python" && \
+                chmod +x "${VENV_NAME}/bin/python"
+            echo "#<! /bin/sh\nexec $(which pip3) \"$@\"" > "${VENV_NAME}/bin/pip" && \
+            chmod +x "${VENV_NAME}/bin/pip"
+            cat > "${VENV_NAME}/bin/activate" << 'EOF'
+#!/bin/bash
+export VIRTUAL_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$VIRTUAL_ENV/bin:$PATH"
+EOF
+            chmod +x "${VENV_NAME}/bin/activate"
+            log_success "Virtual environment created (fallback mode)"
+            return 0
+        fi
+        
+        # Retry venv creation after installing python3-venv
+        if ! python3 -m venv "${VENV_NAME}" 2>/dev/null; then
+            log_error "Failed to create venv after installing python3-venv"
+            exit 1
+        fi
     fi
     
     log_success "Virtual environment created"
 }
 
 # ============================================================================
-# INSTALL PACKAGES
+# INSTALL PACKAGES (NON-RENDER)
 # ============================================================================
 install_packages() {
     log_info "Installing packages..."
@@ -209,7 +292,7 @@ install_packages() {
 }
 
 # ============================================================================
-# COPY SEARXNG SOURCE TO REPO
+# COPY SEARXNG SOURCE TO REPO (NON-RENDER)
 # ============================================================================
 copy_searxng_source() {
     log_info "Copying SearXNG source to repository..."
@@ -267,12 +350,18 @@ setup_configuration() {
 }
 
 # ============================================================================
-# FINAL VERIFICATION
+# FINAL VERIFICATION (NON-RENDER)
 # ============================================================================
 final_verification() {
     log_info "Performing final verification..."
     
     cd "${REPO_DIR}"
+    
+    # On Render, skip verification since we can't write files
+    if [ "$ON_RENDER" = "true" ]; then
+        log_success "Render verification skipped (read-only filesystem)"
+        return 0
+    fi
     
     # Check virtual environment
     if [ ! -d "${VENV_NAME}" ]; then
@@ -315,9 +404,17 @@ main() {
     check_pip
     check_git
     clone_searxng
-    create_venv
-    install_packages
-    copy_searxng_source
+    
+    # Render-specific setup (read-only filesystem)
+    if [ "$ON_RENDER" = "true" ]; then
+        setup_for_render
+    else
+        # Normal setup for non-Render environments
+        create_venv
+        install_packages
+        copy_searxng_source
+    fi
+    
     setup_configuration
     final_verification
     
