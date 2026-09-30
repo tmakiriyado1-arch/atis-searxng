@@ -117,26 +117,19 @@ clone_searxng() {
 
 # ============================================================================
 # SETUP FOR RENDER (READ-ONLY FILESYSTEM)
-# On Render, install searxng as a regular package (not editable)
-# This installs to site-packages which is persistent
+# On Render, install searxng as a regular package with --no-build-isolation
+# This allows the build to see already-installed dependencies
 # ============================================================================
 setup_for_render() {
-    log_info "Render environment detected, installing SearXNG as regular package..."
+    log_info "Render environment detected, installing SearXNG..."
     
     # Set SEARXNG_SETTINGS_PATH to avoid /etc/searxng/settings.yml error during install
     export SEARXNG_SETTINGS_PATH="${REPO_DIR}/settings.yml"
     
-    # Install dependencies from requirements.txt first
-    log_info "Installing SearXNG dependencies..."
-    if ! pip install -r ${SEARXNG_SOURCE_DIR}/requirements.txt; then
-        log_error "Failed to install SearXNG dependencies"
-        exit 1
-    fi
-    
-    # Install searxng as a regular package (not editable)
+    # Install SearXNG with --no-build-isolation so build can see installed deps
     # This installs to site-packages, which is persistent on Render
-    log_info "Installing SearXNG as regular package..."
-    if ! pip install ${SEARXNG_SOURCE_DIR}; then
+    log_info "Installing SearXNG with --no-build-isolation..."
+    if ! pip install --no-build-isolation ${SEARXNG_SOURCE_DIR}; then
         log_error "Failed to install SearXNG"
         exit 1
     fi
