@@ -195,13 +195,39 @@ engines:
     weight: 0
 
   # Mojeek - general web search, no API key
-  # Note: May have Proof of Work CAPTCHA issues
+  # Note: May have Proof of Work CAPTCHA issues - DISABLED due to connection timeouts
   - name: mojeek
     shortcut: mjk
     engine: mojeek
     categories: [general, web]
     inactive: false
+    disabled: true
     weight: 1
+
+  # Brave engines - DISABLED due to HTTP 429 rate limiting
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: true
+    categories: [general, web]
+
+  - name: brave.images
+    engine: brave
+    shortcut: brimg
+    disabled: true
+    categories: [images, web]
+
+  - name: brave.videos
+    engine: brave
+    shortcut: brvid
+    disabled: true
+    categories: [videos, web]
+
+  - name: brave.news
+    engine: brave
+    shortcut: brnews
+    disabled: true
+    categories: [news]
 
   # All other engines disabled by default
   # Uncomment additional engines as needed after testing
