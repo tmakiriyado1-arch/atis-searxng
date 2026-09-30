@@ -117,43 +117,47 @@ clone_searxng() {
 
 # ============================================================================
 # SETUP FOR RENDER (READ-ONLY FILESYSTEM)
-# On Render, we're already in a virtual environment, so just install directly
+# On Render, we need to:
+# 1. Install dependencies
+# 2. Copy searx source to /tmp/searx (writable location)
+# 3. Create version_frozen.py
+# 4. Set SEARXNG_SETTINGS_PATH to our settings.yml
+# We CANNOT use pip install -e because it tries to load /etc/searxng/settings.yml
 # ============================================================================
 setup_for_render() {
-    log_info "Render environment detected, installing directly to current environment..."
+    log_info "Render environment detected, setting up for read-only filesystem..."
     
-    # On Render, we're already in a venv-like environment
-    # Just install packages directly without --user flag
-    
-    # Install packaging for version comparison
-    log_info "Installing packaging..."
-    if ! pip install packaging; then
-        log_error "Failed to install packaging"
-        exit 1
-    fi
-    
-    # Install setuptools
-    log_info "Installing setuptools..."
-    if ! pip install setuptools; then
-        log_error "Failed to install setuptools"
-        exit 1
-    fi
-    
-    # Install SearXNG dependencies from requirements.txt
+    # Install dependencies from requirements.txt
     log_info "Installing SearXNG dependencies..."
     if ! pip install -r ${SEARXNG_SOURCE_DIR}/requirements.txt; then
         log_error "Failed to install SearXNG dependencies"
         exit 1
     fi
     
-    # Install SearXNG in editable mode from source
-    log_info "Installing SearXNG from source..."
-    if ! pip install --no-build-isolation -e ${SEARXNG_SOURCE_DIR}; then
-        log_error "Failed to install SearXNG from source"
+    # Copy searx source to /tmp (writable location)
+    log_info "Copying SearXNG source to /tmp/searx..."
+    if [ -d "/tmp/searx" ]; then
+        rm -rf "/tmp/searx"
+    fi
+    if ! cp -r ${SEARXNG_SOURCE_DIR}/searx /tmp/searx; then
+        log_error "Failed to copy SearXNG source to /tmp"
         exit 1
     fi
     
-    log_success "Render setup complete - SearXNG installed to current environment"
+    # Create version_frozen.py to avoid git dependency issues
+    cat > /tmp/searx/version_frozen.py << 'EOF'
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# pylint: disable=missing-module-docstring
+# this file is generated automatically by searx/version.py
+
+VERSION_STRING = "2026.9.25"
+VERSION_TAG = "2026.9.25"
+DOCKER_TAG = "2026.9.25"
+GIT_URL = "https://github.com/searxng/searxng"
+GIT_BRANCH = "master"
+EOF
+    
+    log_success "Render setup complete - SearXNG dependencies installed, source in /tmp/searx"
 }
 
 # ============================================================================
@@ -337,16 +341,20 @@ setup_configuration() {
 }
 
 # ============================================================================
-# FINAL VERIFICATION (NON-RENDER)
+# FINAL VERIFICATION
 # ============================================================================
 final_verification() {
     log_info "Performing final verification..."
     
     cd "${REPO_DIR}"
     
-    # On Render, skip verification since we can't write files
+    # On Render, check /tmp/searx exists instead of project searx
     if [ "$ON_RENDER" = "true" ]; then
-        log_success "Render verification skipped (read-only filesystem)"
+        if [ ! -d "/tmp/searx" ]; then
+            log_error "/tmp/searx directory not found"
+            exit 1
+        fi
+        log_success "Render verification passed"
         return 0
     fi
     
@@ -392,7 +400,7 @@ main() {
     check_git
     clone_searxng
     
-    # Render-specific setup (already in a venv, read-only filesystem)
+    # Render-specific setup (read-only filesystem)
     if [ "$ON_RENDER" = "true" ]; then
         setup_for_render
     else

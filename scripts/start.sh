@@ -58,13 +58,19 @@ validate_environment() {
     
     cd "${REPO_DIR}"
     
-    # On Render, we don't have a .venv, we use the system/pre-installed environment
+    # On Render, we use /tmp/searx (writable location)
     if [ "$ON_RENDER" = "true" ]; then
-        log_info "Render environment detected, skipping venv check"
+        log_info "Render environment detected"
         
         # Check settings file exists
         if [ ! -f "${SETTINGS_FILE}" ]; then
             log_error "settings.yml not found at ${SETTINGS_FILE}"
+            exit 1
+        fi
+        
+        # Check /tmp/searx exists
+        if [ ! -d "/tmp/searx" ]; then
+            log_error "/tmp/searx directory not found. Run setup.sh first."
             exit 1
         fi
         
@@ -114,7 +120,7 @@ validate_configuration() {
     
     cd "${REPO_DIR}"
     
-    # On Render, use system python3 directly (already in a venv provided by Render)
+    # On Render, use system python3 with /tmp/searx
     if [ "$ON_RENDER" = "true" ]; then
         local validation_output
         validation_output=$(python3 << EOF
@@ -250,12 +256,12 @@ verify_runtime_config() {
     
     cd "${REPO_DIR}"
     
-    # On Render, use system Python directly (already in Render's venv)
+    # On Render, use /tmp/searx with our settings.yml
     if [ "$ON_RENDER" = "true" ]; then
-        # Set the same environment variables that will be used for the server
+        # Set environment variables
         export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
         export SEARXNG_SECRET="${SEARXNG_SECRET:-$(openssl rand -hex 32)}"
-        export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
+        export PYTHONPATH="/tmp:${PYTHONPATH:-}"
         
         # Use Python to check the effective runtime configuration
         local runtime_check
@@ -265,6 +271,9 @@ import os
 
 # Set SEARXNG_SETTINGS_PATH before importing searx
 os.environ['SEARXNG_SETTINGS_PATH'] = '${SETTINGS_FILE}'
+
+# Add /tmp to path so we can import searx from there
+sys.path.insert(0, '/tmp')
 
 # Initialize settings the same way the server will
 from searx import settings, init_settings
@@ -365,16 +374,16 @@ start_searxng() {
     log_info "Using settings file: ${SETTINGS_FILE}"
     echo ""
     
-    # On Render, use the pre-installed environment directly
+    # On Render, use /tmp/searx with our settings.yml
     if [ "$ON_RENDER" = "true" ]; then
         export SEARXNG_SETTINGS_PATH="${SETTINGS_FILE}"
         export SEARXNG_PORT="${SEARXNG_PORT}"
         export SEARXNG_BIND_ADDRESS="0.0.0.0"
         export SEARXNG_DEBUG="false"
         export SEARXNG_SECRET="${SEARXNG_SECRET:-$(openssl rand -hex 32)}"
-        export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
+        export PYTHONPATH="/tmp:${REPO_DIR}:${PYTHONPATH:-}"
         
-        log_success "Starting SearXNG server on Render..."
+        log_success "Starting SearXNG server on Render from /tmp/searx..."
         echo ""
         echo "Settings file: ${SETTINGS_FILE}"
         echo "Local endpoint: http://127.0.0.1:${SEARXNG_PORT}/"
@@ -385,7 +394,8 @@ start_searxng() {
         echo "Press Ctrl+C to stop the server"
         echo ""
         
-        # Run SearXNG using the webapp module directly
+        # Run SearXNG using the webapp module from /tmp/searx
+        cd /tmp
         exec python3 -m searx.webapp run
     fi
     
