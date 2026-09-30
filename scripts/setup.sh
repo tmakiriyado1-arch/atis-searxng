@@ -120,9 +120,37 @@ create_venv() {
         rm -rf "${VENV_NAME}"
     fi
     
-    if ! python3 -m venv "${VENV_NAME}"; then
-        log_error "Failed to create virtual environment"
-        exit 1
+    # Try to create virtual environment
+    # On Render, ensurepip may not be available, so we need to install it first
+    if ! python3 -m venv "${VENV_NAME}" 2>/dev/null; then
+        log_warning "Failed to create venv directly, trying with ensurepip..."
+        # Install ensurepip if available
+        if command -v apt-get &> /dev/null; then
+            log_info "Installing python3-venv package..."
+            if apt-get update && apt-get install -y python3-venv 2>/dev/null; then
+                if ! python3 -m venv "${VENV_NAME}"; then
+                    log_error "Failed to create virtual environment after installing python3-venv"
+                    exit 1
+                fi
+            else
+                log_error "Failed to install python3-venv package"
+                exit 1
+            fi
+        else
+            # Try using the system python directly without venv
+            log_warning "No apt-get available, trying without venv..."
+            # Create a minimal venv structure manually
+            mkdir -p "${VENV_NAME}/bin"
+            ln -sf "$(which python3)" "${VENV_NAME}/bin/python3"
+            ln -sf "$(which python3)" "${VENV_NAME}/bin/python"
+            # Create activate script
+            cat > "${VENV_NAME}/bin/activate" << 'EOF'
+#!/bin/bash
+export VIRTUAL_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$VIRTUAL_ENV/bin:$PATH"
+EOF
+            chmod +x "${VENV_NAME}/bin/activate"
+        fi
     fi
     
     log_success "Virtual environment created"
