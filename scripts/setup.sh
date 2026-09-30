@@ -127,30 +127,35 @@ create_venv() {
         # Install ensurepip if available
         if command -v apt-get &> /dev/null; then
             log_info "Installing python3-venv package..."
-            if apt-get update && apt-get install -y python3-venv 2>/dev/null; then
-                if ! python3 -m venv "${VENV_NAME}"; then
-                    log_error "Failed to create virtual environment after installing python3-venv"
-                    exit 1
-                fi
-            else
-                log_error "Failed to install python3-venv package"
-                exit 1
-            fi
+            # On Render, we can't use apt-get due to read-only filesystem
+            # Skip apt-get and fall through to manual venv creation
+            log_warning "apt-get available but filesystem may be read-only, skipping..."
         else
-            # Try using the system python directly without venv
-            log_warning "No apt-get available, trying without venv..."
-            # Create a minimal venv structure manually
-            mkdir -p "${VENV_NAME}/bin"
-            ln -sf "$(which python3)" "${VENV_NAME}/bin/python3"
-            ln -sf "$(which python3)" "${VENV_NAME}/bin/python"
-            # Create activate script
-            cat > "${VENV_NAME}/bin/activate" << 'EOF'
+            log_info "No apt-get available"
+        fi
+        
+        # Try using the system python directly without venv
+        log_warning "Trying without venv (using system Python)..."
+        # Create a minimal venv structure manually
+        mkdir -p "${VENV_NAME}/bin"
+        ln -sf "$(which python3)" "${VENV_NAME}/bin/python3" 2>/dev/null || \
+            cp "$(which python3)" "${VENV_NAME}/bin/python3" 2>/dev/null || \
+            echo "#<! /bin/sh\nexec $(which python3) \"$@\"" > "${VENV_NAME}/bin/python3" && \
+            chmod +x "${VENV_NAME}/bin/python3"
+        ln -sf "$(which python3)" "${VENV_NAME}/bin/python" 2>/dev/null || \
+            cp "$(which python3)" "${VENV_NAME}/bin/python" 2>/dev/null || \
+            echo "#<! /bin/sh\nexec $(which python3) \"$@\"" > "${VENV_NAME}/bin/python" && \
+            chmod +x "${VENV_NAME}/bin/python"
+        # Create pip wrapper
+        echo "#<! /bin/sh\nexec $(which pip3) \"$@\"" > "${VENV_NAME}/bin/pip" && \
+        chmod +x "${VENV_NAME}/bin/pip"
+        # Create activate script
+        cat > "${VENV_NAME}/bin/activate" << 'EOF'
 #!/bin/bash
 export VIRTUAL_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="$VIRTUAL_ENV/bin:$PATH"
 EOF
-            chmod +x "${VENV_NAME}/bin/activate"
-        fi
+        chmod +x "${VENV_NAME}/bin/activate"
     fi
     
     log_success "Virtual environment created"
