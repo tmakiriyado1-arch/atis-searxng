@@ -53,22 +53,21 @@ check_python_version() {
         exit 1
     fi
     
-    PYTHON_VERSION=$(python3 --version 2>&1 | grep -oP '\d+\.\d+\.\d+' | head -1)
+    PYTHON_VERSION=$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
     log_info "Detected Python version: ${PYTHON_VERSION}"
     
-    # Compare versions using Python to avoid shell version comparison issues
-    if ! python3 -c "
-import sys
-from packaging import version
-required = version.parse('${PYTHON_VERSION_REQUIRED}')
-current = version.parse('${PYTHON_VERSION}')
-sys.exit(0 if current >= required else 1)
-" 2>/dev/null; then
+    # Simple numeric comparison without external dependencies
+    # Extract major and minor version numbers
+    PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
+    PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
+    
+    if [ "$PYTHON_MAJOR" -ge 3 ] && [ "$PYTHON_MINOR" -ge 10 ]; then
+        log_success "Python version check passed"
+        return 0
+    else
         log_error "Python ${PYTHON_VERSION_REQUIRED} or higher is required. Found: ${PYTHON_VERSION}"
         exit 1
     fi
-    
-    log_success "Python version check passed"
 }
 
 check_pip() {

@@ -1,2 +1,22 @@
+# Python
 .venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# SearXNG
 searx/
+searxng_data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
