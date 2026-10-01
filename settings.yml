@@ -241,11 +241,12 @@ engines:
     categories: [general, web]
     weight: 2
 
-  # Bing - free, no API key, reliable
+  # Bing - DISABLED: poor result quality, no keyword matching
   - name: bing
     engine: bing
     shortcut: bi
     categories: [general, web]
+    disabled: true
     weight: 2
 
   # DuckDuckGo - free, no API key, privacy-focused
