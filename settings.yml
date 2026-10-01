@@ -264,6 +264,7 @@ engines:
     shortcut: yd
     categories: [general, web]
     weight: 2
+    results_per_page: 10
 
   # Swisscows - DISABLED: results_per_page validation issue
   # - name: swisscows
