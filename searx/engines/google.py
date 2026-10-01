@@ -28,6 +28,7 @@ from lxml import html
 
 from searx.enginelib.traits import EngineTraits
 from searx.exceptions import SearxEngineCaptchaException
+from searx import logger
 from searx.locales import get_official_locales, language_tag, region_tag
 from searx.result_types import EngineResults
 from searx.utils import (
@@ -37,9 +38,13 @@ from searx.utils import (
     extract_text,
 )
 
+from searx.enginelib.google_transport import GoogleTransport
+
 if t.TYPE_CHECKING:
     from searx.extended_types import SXNG_Response
     from searx.search.processors import OnlineParams
+
+_transport = GoogleTransport()
 
 about = {
     "website": "https://www.google.com",
@@ -332,6 +337,25 @@ def google_request(
 
 def request(query: str, params: "OnlineParams") -> None:
     google_request(query, params)
+    # Use GoogleTransport to make the HTTP call
+    transport_result = _transport.request(
+        url=params["url"],
+        headers=params["headers"],
+        cookies=params.get("cookies"),
+        timeout=params.get("timeout"),
+        impersonate=params.get("impersonate"),
+    )
+    # Log the classification (safe, no sensitive data)
+    logger.info(
+        "[GOOGLE_TRANSPORT] classification=%s status=%s duration_ms=%.0f",
+        transport_result.classification.value,
+        transport_result.status_code,
+        transport_result.elapsed_time * 1000,
+    )
+    # Store response for processor to use
+    # If transport failed, we still let the processor try its own call
+    if transport_result.response is not None:
+        params["_transport_response"] = transport_result.response
 
 
 def response(resp: "SXNG_Response") -> EngineResults:

@@ -165,6 +165,11 @@ class OnlineProcessor(EngineProcessor):
         return params
 
     def _send_http_request(self, params: OnlineParams):
+        # Check if engine has already made the HTTP call using its own transport
+        if "_transport_response" in params:
+            response = params["_transport_response"]
+            del params["_transport_response"]
+            return response
 
         # create dictionary which contain all information about the request
         request_args: dict[str, t.Any] = {
