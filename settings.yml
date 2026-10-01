@@ -227,13 +227,11 @@ engines:
     disabled: true
     categories: [news]
 
-  # Google CSE - DISABLED: requires API key
-  - name: google_cse
-    engine: google_cse
-    shortcut: gcs
-    disabled: true
-    categories: [general, web]
-    # Note: engine name contains underscore - this is a known SearXNG engine
+  # Google CSE - DISABLED: requires API key, name cannot contain underscore
+  # - name: google_cse
+  #   engine: google_cse
+  #   shortcut: gcs
+  #   categories: [general, web]
 
   # Primary engines (weight: 2) - most reliable results
   # Google - free, no API key, most comprehensive
@@ -264,13 +262,12 @@ engines:
     categories: [general, web]
     weight: 2
 
-  # Swisscows - free, no API key, privacy-focused (Swiss)
-  - name: swisscows
-    engine: swisscows
-    shortcut: sw
-    categories: [general, web]
-    weight: 1
-    # Note: results_per_page must be <= 20 for web search
+  # Swisscows - DISABLED: results_per_page validation issue
+  # - name: swisscows
+  #   engine: swisscows
+  #   shortcut: sw
+  #   categories: [general, web]
+  #   weight: 1
 
   # All other engines disabled by default
   # Uncomment additional engines as needed after testing
