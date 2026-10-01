@@ -220,12 +220,48 @@ engines:
     disabled: true
     categories: [news]
 
-  # Google CSE - DISABLED: too many requests
+  # Google CSE - DISABLED: requires API key
   - name: google_cse
     engine: google_cse
     shortcut: gcs
     disabled: true
     categories: [general, web]
+
+  # Free engines (no API key required)
+  # DuckDuckGo - free, no API key
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    categories: [general, web]
+    weight: 1
+
+  # Bing - free, no API key
+  - name: bing
+    engine: bing
+    shortcut: bi
+    categories: [general, web]
+    weight: 1
+
+  # Google - free, no API key
+  - name: google
+    engine: google
+    shortcut: go
+    categories: [general, web]
+    weight: 1
+
+  # Swisscows - free, no API key, privacy-focused
+  - name: swisscows
+    engine: swisscows
+    shortcut: sw
+    categories: [general, web]
+    weight: 1
+
+  # Yandex - free, no API key
+  - name: yandex
+    engine: yandex
+    shortcut: yd
+    categories: [general, web]
+    weight: 1
 
   # All other engines disabled by default
   # Uncomment additional engines as needed after testing
