@@ -226,6 +226,7 @@ engines:
     shortcut: gcs
     disabled: true
     categories: [general, web]
+    # Note: engine name contains underscore - this is a known SearXNG engine
 
   # Primary engines (weight: 2) - most reliable results
   # Google - free, no API key, most comprehensive
@@ -262,6 +263,7 @@ engines:
     shortcut: sw
     categories: [general, web]
     weight: 1
+    # Note: results_per_page must be <= 20 for web search
 
   # All other engines disabled by default
   # Uncomment additional engines as needed after testing
@@ -269,19 +271,4 @@ engines:
   - name: 360search
     engine: 360search
     shortcut: 360so
-    disabled: true
-
-  - name: bing
-    engine: bing
-    shortcut: bi
-    disabled: true
-
-  - name: duckduckgo
-    engine: duckduckgo
-    shortcut: ddg
-    disabled: true
-
-  - name: google
-    engine: google
-    shortcut: gg
     disabled: true
