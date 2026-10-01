@@ -234,11 +234,12 @@ engines:
   #   categories: [general, web]
 
   # Primary engines (weight: 2) - most reliable results
-  # Google - free, no API key, most comprehensive
+  # Google - DISABLED: HTML structure changed, XPath selectors broken
   - name: google
     engine: google
     shortcut: go
     categories: [general, web]
+    disabled: true
     weight: 2
 
   # Bing - DISABLED: poor result quality, no keyword matching
