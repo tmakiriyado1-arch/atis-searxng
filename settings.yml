@@ -7,7 +7,7 @@
 # ============================================================================
 # Use default settings and merge with our customizations
 # This tells SearXNG to merge our settings with the defaults rather than replace them
-use_default_settings: true
+use_default_settings: false
 
 general:
   debug: false
@@ -186,13 +186,12 @@ engines:
     categories: [general, web]
     weight: 1
 
-  # SearXNG built-in engine for testing connectivity
-  # This is a fallback that should always work
-  - name: searx
-    engine: searx
-    shortcut: sx
-    categories: [general]
-    weight: 0
+  # SearXNG built-in engine for testing connectivity - REMOVED: engine file does not exist
+  # - name: searx
+  #   engine: searx
+  #   shortcut: sx
+  #   categories: [general]
+  #   weight: 0
 
   # Mojeek - general web search, no API key
   # Note: May have Proof of Work CAPTCHA issues - DISABLED due to connection timeouts
