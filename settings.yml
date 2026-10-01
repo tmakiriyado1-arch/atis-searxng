@@ -18,6 +18,13 @@ general:
   enable_metrics: false
   open_metrics: ''
 
+# DOI resolver settings (required by preferences.py)
+doi_resolvers:
+  oadoi.org: 'https://oadoi.org/'
+  doi.org: 'https://doi.org/'
+
+default_doi_resolver: 'oadoi.org'
+
 brand:
   docs_url: https://docs.searxng.org/
   public_instances: https://searx.space
