@@ -394,6 +394,11 @@ start_searxng() {
         echo "Press Ctrl+C to stop the server"
         echo ""
         
+        # Copy custom webapp.py to editable install location for Render
+        # This ensures our diagnostic endpoint is available
+        mkdir -p /tmp/searxng-source/searx
+        cp -f "${REPO_DIR}/searx/webapp.py" /tmp/searxng-source/searx/webapp.py
+        
         # Run SearXNG using the webapp module from project searx
         exec python3 -m searx.webapp run
     fi
