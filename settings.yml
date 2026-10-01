@@ -162,21 +162,21 @@ categories:
 # Note: Test each engine individually. Disable any that fail.
 
 engines:
-  # Wikipedia - reliable, no API key, good for entity research
+  # Wikipedia - supporting engine, never leading
   - name: wikipedia
     engine: wikipedia
     shortcut: wp
     display_type: ["infobox", "list"]
     categories: [general]
-    weight: 2
+    weight: 0
 
-  # Wikidata - structured knowledge, no API key
+  # Wikidata - supporting engine, never leading
   - name: wikidata
     engine: wikidata
     shortcut: wd
     display_type: ["infobox", "list"]
     categories: [general]
-    weight: 2
+    weight: 0
 
   # Qwant - DISABLED: too many requests / access denied
   - name: qwant
@@ -227,39 +227,39 @@ engines:
     disabled: true
     categories: [general, web]
 
-  # Free engines (no API key required)
-  # DuckDuckGo - free, no API key
-  - name: duckduckgo
-    engine: duckduckgo
-    shortcut: ddg
-    categories: [general, web]
-    weight: 1
-
-  # Bing - free, no API key
-  - name: bing
-    engine: bing
-    shortcut: bi
-    categories: [general, web]
-    weight: 1
-
-  # Google - free, no API key
+  # Primary engines (weight: 2) - most reliable results
+  # Google - free, no API key, most comprehensive
   - name: google
     engine: google
     shortcut: go
     categories: [general, web]
-    weight: 1
+    weight: 2
 
-  # Swisscows - free, no API key, privacy-focused
-  - name: swisscows
-    engine: swisscows
-    shortcut: sw
+  # Bing - free, no API key, reliable
+  - name: bing
+    engine: bing
+    shortcut: bi
     categories: [general, web]
-    weight: 1
+    weight: 2
 
-  # Yandex - free, no API key
+  # DuckDuckGo - free, no API key, privacy-focused
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    categories: [general, web]
+    weight: 2
+
+  # Yandex - free, no API key, good for non-English results
   - name: yandex
     engine: yandex
     shortcut: yd
+    categories: [general, web]
+    weight: 2
+
+  # Swisscows - free, no API key, privacy-focused (Swiss)
+  - name: swisscows
+    engine: swisscows
+    shortcut: sw
     categories: [general, web]
     weight: 1
 
