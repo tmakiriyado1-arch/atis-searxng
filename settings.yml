@@ -234,12 +234,12 @@ engines:
   #   categories: [general, web]
 
   # Primary engines (weight: 2) - most reliable results
-  # Google - DISABLED: HTML structure changed, XPath selectors broken
+  # Google - re-enabled for diagnostic testing
   - name: google
     engine: google
     shortcut: go
     categories: [general, web]
-    disabled: true
+    disabled: false
     weight: 2
 
   # Bing - DISABLED: poor result quality, no keyword matching
