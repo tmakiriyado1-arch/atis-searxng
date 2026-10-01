@@ -1306,6 +1306,442 @@ def page_not_found(_e):
     return render('404.html'), 404
 
 
+# ---------------------------------------------------------------------------
+# TEMPORARY DIAGNOSTIC ENDPOINT - Remove after diagnosis
+# ---------------------------------------------------------------------------
+
+
+@app.route('/diagnostics/google', methods=['GET'])
+def diagnostics_google():
+    """Temporary diagnostic endpoint for Google engine analysis.
+    
+    This endpoint runs the Google engine diagnostic from within the actual
+    Render/SearXNG environment to determine exactly where Google search fails.
+    
+    SECURITY: Only tests a fixed URL with a fixed query. No user input is
+    used in the request. Response body is limited to 5KB. Sensitive headers
+    are redacted.
+    
+    REMOVE THIS ENDPOINT after diagnosis is complete.
+    """
+    import json
+    import random
+    import socket
+    import ssl
+    import time
+    import urllib.parse
+    from datetime import datetime, timezone
+    from lxml import html
+    
+    from searx.enginelib.traits import EngineTraits
+    from searx.result_types import EngineResults
+    from searx.utils import eval_xpath, eval_xpath_getindex, eval_xpath_list, extract_text
+    from searx.network import get as searx_get
+    from searx.engines.google import (
+        nokia_useragents,
+        get_google_info,
+        unwrap_google_url,
+    )
+    
+    TEST_QUERY = "SearXNG diagnostic test"
+    MAX_BODY_DUMP = 5000
+    REQUEST_TIMEOUT = 30
+    
+    # Helper functions
+    def sanitize_url(url):
+        if not url:
+            return url
+        try:
+            parsed = urllib.parse.urlparse(url)
+            query_params = urllib.parse.parse_qs(parsed.query)
+            sanitized_params = {}
+            if 'q' in query_params:
+                sanitized_params['q'] = query_params['q']
+            sanitized_query = urllib.parse.urlencode(sanitized_params, doseq=True)
+            return parsed._replace(query=sanitized_query).geturl()
+        except Exception:
+            return re.sub(r'([?&])[^=&]+=[^=&]+', r'\1***', url)
+    
+    def classify_response(status_code, headers, body, url):
+        if url and ('sorry.google.com' in url or '/sorry/' in url):
+            return "CAPTCHA/SORRY_PAGE"
+        location = headers.get('Location', headers.get('location', ''))
+        if location and ('sorry.google.com' in location or '/sorry/' in location):
+            return "CAPTCHA/SORRY_PAGE"
+        if status_code == 429:
+            return "HTTP_429_RATE_LIMIT"
+        if status_code == 403:
+            return "HTTP_403_FORBIDDEN"
+        if status_code == 400:
+            return "HTTP_400_BAD_REQUEST"
+        if status_code >= 500:
+            return "HTTP_5XX_SERVER_ERROR"
+        body_lower = body.lower()
+        if any(x in body_lower for x in ['captcha', 'recaptcha', 'verify you are human', "i'm not a robot"]):
+            return "CAPTCHA_PAGE"
+        if any(x in body_lower for x in ['consent.google', 'before you continue', 'accept all', 'cookie consent']):
+            return "CONSENT_PAGE"
+        if any(x in body_lower for x in ['access denied', 'bot detection', 'automated queries']):
+            return "BOT_PROTECTION"
+        if any(x in body_lower for x in ['our systems have detected unusual traffic', 'please verify', 'temporarily blocked']):
+            return "INTERSTITIAL_BLOCK"
+        if any(x in body_lower for x in ['too many requests', 'rate limit', 'slow down']):
+            return "RATE_LIMIT_PAGE"
+        if body.lstrip().startswith('<?xml') or '<wml>' in body_lower:
+            return "WML_RESULTS"
+        if '<html' in body_lower or '<!doctype html' in body_lower:
+            if any(x in body_lower for x in ['<div class="', 'search results', 'g ', 'rc']):
+                return "HTML_RESULTS"
+            return "HTML_PAGE"
+        return "UNKNOWN"
+    
+    def test_dns(hostname):
+        result = {"status": "ok", "addresses": [], "error": None}
+        try:
+            addr_info = socket.getaddrinfo(hostname, None)
+            for family, type_, proto, canonname, sockaddr in addr_info:
+                result["addresses"].append(sockaddr[0])
+            result["addresses"] = list(set(result["addresses"]))
+        except socket.gaierror as e:
+            result["status"] = "failed"
+            result["error"] = str(e)
+        return result
+    
+    def test_tcp_tls(hostname, port=443):
+        result = {"status": "ok", "tcp": False, "tls": False, "error": None}
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            sock.connect((hostname, port))
+            result["tcp"] = True
+            context = ssl.create_default_context()
+            tls_sock = context.wrap_socket(sock, server_hostname=hostname)
+            result["tls"] = True
+            tls_sock.close()
+            sock.close()
+        except socket.timeout:
+            result["status"] = "failed"
+            result["error"] = "Connection timed out"
+        except ConnectionRefusedError:
+            result["status"] = "failed"
+            result["error"] = "Connection refused"
+        except ssl.SSLError as e:
+            result["status"] = "partial"
+            result["tcp"] = True
+            result["error"] = f"TLS handshake failed: {e}"
+        except Exception as e:
+            result["status"] = "failed"
+            result["error"] = str(e)
+        return result
+    
+    def build_google_url_and_params(query):
+        params = {
+            "query": query,
+            "pageno": 1,
+            "time_range": None,
+            "safesearch": 0,
+            "searxng_locale": "en",
+            "language": None,
+            "categories": None,
+            "engines": None,
+            "searxng_user": None,
+            "url": None,
+            "headers": {},
+            "cookies": {},
+        }
+        traits = EngineTraits()
+        traits.all_locale = "ZZ"
+        google_info = get_google_info(params, traits)
+        start = (params["pageno"] - 1) * 10
+        args = {
+            "q": query,
+            "sca_esv": "1",
+            **google_info["params"],
+        }
+        if start:
+            args["start"] = start
+        url = f"https://www.google.com/wml/search?{urllib.parse.urlencode(args)}"
+        params["headers"]["User-Agent"] = random.choice(nokia_useragents)
+        params["headers"]["Accept"] = "*/*"
+        params["headers"]["Accept-Language"] = "en-US,en;q=0.5"
+        params["cookies"]["CONSENT"] = "YES+"
+        return url, params["headers"], params["cookies"]
+    
+    def run_google_parser(dom, body):
+        results = EngineResults()
+        parser_results = {
+            "result_nodes_count": 0,
+            "parsed_results_count": 0,
+            "titles_found": 0,
+            "urls_found": 0,
+            "content_found": 0,
+            "first_3_results": [],
+            "parser_errors": [],
+        }
+        try:
+            result_nodes = eval_xpath_list(dom, '//div[contains(@class, "zMzFAb")]')
+            parser_results["result_nodes_count"] = len(result_nodes)
+            for result in result_nodes:
+                try:
+                    title_tag = eval_xpath_getindex(
+                        result, './/a[contains(@class, "fuLhoc")]//span[contains(@class, "CVA68e")]', 0, default=None
+                    )
+                    if title_tag is None:
+                        continue
+                    title = extract_text(title_tag)
+                    parser_results["titles_found"] += 1
+                    raw_url = eval_xpath_getindex(result, './/a[contains(@class, "fuLhoc")]/@href', 0, default=None)
+                    if raw_url is None:
+                        continue
+                    parser_results["urls_found"] += 1
+                    url = unwrap_google_url(raw_url)
+                    content_elem = eval_xpath(result, './/div[contains(@class, "taTFJ")]//span[contains(@class, "FrIlee")]')
+                    content = extract_text(content_elem) if content_elem else ""
+                    parser_results["content_found"] += 1
+                    thumbnail = eval_xpath_getindex(result, './/img[contains(@src, "encrypted-tbn")]/@src', 0, default=None)
+                    if len(parser_results["first_3_results"]) < 3:
+                        parser_results["first_3_results"].append({
+                            "title": title or "",
+                            "url": url or "",
+                            "content": content or "",
+                            "thumbnail": thumbnail or "",
+                        })
+                    results.add(
+                        results.types.MainResult(
+                            url=url,
+                            title=title or "",
+                            content=content or "",
+                            thumbnail=thumbnail or "",
+                        )
+                    )
+                    parser_results["parsed_results_count"] += 1
+                except Exception as e:
+                    parser_results["parser_errors"].append(str(e))
+        except Exception as e:
+            parser_results["parser_errors"].append(f"Parser crash: {e}")
+        return parser_results
+    
+    def get_dom_structure_sample(dom):
+        structure = {}
+        try:
+            potential_results = eval_xpath_list(dom, '//div')
+            if potential_results:
+                first_div = potential_results[0]
+                structure["first_div_classes"] = first_div.get('class', '')
+                structure["first_div_id"] = first_div.get('id', '')
+                children = list(first_div)
+                structure["first_div_children_count"] = len(children)
+                structure["first_div_children_tags"] = [child.tag for child in children[:10]]
+                anchors = eval_xpath_list(first_div, './/a')
+                if anchors:
+                    structure["first_anchor_href"] = anchors[0].get('href', '')[:200]
+                    structure["first_anchor_classes"] = anchors[0].get('class', '')
+        except Exception as e:
+            structure["error"] = str(e)
+        return structure
+    
+    # Run diagnostic
+    report = {
+        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+        "test_query": TEST_QUERY,
+    }
+    
+    # DNS
+    dns_result = test_dns("www.google.com")
+    report["dns"] = dns_result
+    
+    # TCP/TLS
+    tls_result = test_tcp_tls("www.google.com", 443)
+    report["tcp_tls"] = tls_result
+    
+    # Build request
+    request_url, request_headers, request_cookies = build_google_url_and_params(TEST_QUERY)
+    report["request"] = {
+        "url": sanitize_url(request_url),
+        "headers": {k: v for k, v in request_headers.items() if k.lower() not in ['authorization', 'cookie', 'x-api-key']},
+        "cookies": {k: "[REDACTED]" for k, v in request_cookies.items()},
+        "user_agent": request_headers.get("User-Agent", "NOT SET"),
+    }
+    
+    # Make request
+    start_time = time.time()
+    exception_occurred = None
+    http_status = None
+    http_headers = {}
+    http_body = b""
+    
+    try:
+        response = searx_get(
+            report["request"]["url"],
+            headers=report["request"]["headers"],
+            cookies=request_cookies,
+            timeout=REQUEST_TIMEOUT,
+            impersonate="chrome99_android",
+        )
+        http_status = response.status_code
+        http_headers = dict(response.headers)
+        http_body = response.content
+    except Exception as e:
+        exception_occurred = str(e)
+        exception_type = type(e).__name__
+        report["request_exception"] = {
+            "type": exception_type,
+            "message": exception_occurred,
+        }
+    
+    request_duration = time.time() - start_time
+    report["request_duration"] = round(request_duration, 3)
+    
+    # Analyze response
+    response_info = {
+        "status_code": http_status,
+        "headers": {},
+        "body_size": len(http_body) if http_body else 0,
+        "body_preview": "",
+    }
+    
+    if http_status:
+        relevant_headers = ['Retry-After', 'Location', 'Content-Type', 'Server', 
+                           'X-Robots-Tag', 'Cache-Control', 'Set-Cookie',
+                           'Alt-Svc', 'Date', 'Content-Length']
+        for h in relevant_headers:
+            if h in http_headers:
+                response_info["headers"][h] = http_headers[h]
+            elif h.lower() in http_headers:
+                response_info["headers"][h] = http_headers[h.lower()]
+        body_text = http_body.decode('utf-8', errors='replace') if http_body else ""
+        response_info["body_preview"] = body_text[:MAX_BODY_DUMP]
+        response_info["body_encoding"] = "utf-8"
+        response_classification = classify_response(
+            http_status, 
+            {k.lower(): v for k, v in http_headers.items()}, 
+            body_text,
+            report["request"]["url"]
+        )
+        response_info["classification"] = response_classification
+    elif exception_occurred:
+        response_info["error"] = exception_occurred
+        response_info["exception_type"] = report.get("request_exception", {}).get("type", "Unknown")
+    
+    report["response"] = response_info
+    
+    # Parser
+    parser_results = {"ran": False, "error": None}
+    body_text = http_body.decode('utf-8', errors='replace') if http_body else ""
+    should_parse = http_status and http_status in (200, 201, 202)
+    if should_parse and body_text:
+        try:
+            dom = html.fromstring(body_text)
+            parser_results = run_google_parser(dom, body_text)
+            parser_results["ran"] = True
+            parser_results["dom_structure"] = get_dom_structure_sample(dom)
+        except Exception as e:
+            parser_results["error"] = str(e)
+            parser_results["ran"] = False
+    report["parser"] = parser_results
+    
+    # Final classification
+    final_classification = "G. Other"
+    reason = ""
+    
+    if report["dns"]["status"] == "failed":
+        final_classification = "A. DNS/network failure"
+        reason = f"DNS resolution failed: {report['dns']['error']}"
+    elif report["tcp_tls"]["status"] == "failed":
+        final_classification = "B. TCP/TLS failure"
+        reason = f"TCP/TLS failed: {report['tcp_tls']['error']}"
+    elif report.get("request_exception"):
+        exc = report["request_exception"]
+        exc_msg = exc.get("message", "").lower()
+        exc_type = exc.get("type", "")
+        if "timeout" in exc_msg or "timed out" in exc_msg:
+            final_classification = "B. TCP/TLS failure"
+            reason = f"Request timed out: {exc['message']}"
+        elif "connection" in exc_msg:
+            final_classification = "B. TCP/TLS failure"
+            reason = f"Connection error: {exc['message']}"
+        elif "403" in exc_msg or "forbidden" in exc_msg or "access denied" in exc_msg:
+            # Check if this is SearXNG's own suspension
+            if "suspended_time" in exc_msg:
+                final_classification = "D. HTTP 403/bot protection"
+                reason = f"SearXNG engine suspended (suspended_time in message): {exc['message']}. This is SearXNG's internal rate limiter, not Google's response."
+            else:
+                final_classification = "D. HTTP 403/bot protection"
+                reason = f"Google returned HTTP 403: {exc['message']}. This failure occurs BEFORE SearXNG's XPath extraction."
+        elif "429" in exc_msg or "rate limit" in exc_msg or "too many" in exc_msg:
+            final_classification = "C. HTTP 429/rate limiting"
+            reason = f"Google returned HTTP 429: {exc['message']}. This failure occurs BEFORE SearXNG's XPath extraction."
+        elif "captcha" in exc_msg or "sorry" in exc_msg:
+            final_classification = "E. CAPTCHA/consent/interstitial"
+            reason = f"Google CAPTCHA/sorry: {exc['message']}. This failure occurs BEFORE SearXNG's XPath extraction."
+        else:
+            final_classification = "G. Other"
+            reason = f"Request exception: {exc_type}: {exc['message']}"
+    elif http_status == 429:
+        final_classification = "C. HTTP 429/rate limiting"
+        reason = f"Google returned HTTP 429"
+        retry_after = response_info["headers"].get("Retry-After", "not specified")
+        if retry_after:
+            reason += f" (Retry-After: {retry_after})"
+        reason += ". This failure occurs BEFORE SearXNG's XPath extraction."
+    elif http_status == 403:
+        final_classification = "D. HTTP 403/bot protection"
+        reason = f"Google returned HTTP 403"
+        location = response_info["headers"].get("Location", "")
+        if location:
+            reason += f" (Location: {location})"
+        reason += ". This failure occurs BEFORE SearXNG's XPath extraction."
+    elif http_status in (301, 302, 303, 307, 308):
+        location = response_info["headers"].get("Location", "")
+        if location and ("sorry" in location.lower() or "captcha" in location.lower()):
+            final_classification = "E. CAPTCHA/consent/interstitial"
+            reason = f"Redirect to: {location}. This failure occurs BEFORE SearXNG's XPath extraction."
+        else:
+            final_classification = "E. CAPTCHA/consent/interstitial"
+            reason = f"Redirect detected (Location: {location}). This may be a CAPTCHA or consent page."
+    elif response_info.get("classification") == "CAPTCHA/SORRY_PAGE":
+        final_classification = "E. CAPTCHA/consent/interstitial"
+        reason = "Response is a Google CAPTCHA/sorry page. This failure occurs BEFORE SearXNG's XPath extraction."
+    elif response_info.get("classification") == "CAPTCHA_PAGE":
+        final_classification = "E. CAPTCHA/consent/interstitial"
+        reason = "Response contains CAPTCHA elements. This failure occurs BEFORE SearXNG's XPath extraction."
+    elif response_info.get("classification") == "CONSENT_PAGE":
+        final_classification = "E. CAPTCHA/consent/interstitial"
+        reason = "Response is a Google consent page. This failure occurs BEFORE SearXNG's XPath extraction."
+    elif response_info.get("classification") == "INTERSTITIAL_BLOCK":
+        final_classification = "E. CAPTCHA/consent/interstitial"
+        reason = "Response is a Google interstitial/block page. This failure occurs BEFORE SearXNG's XPath extraction."
+    elif response_info.get("classification") == "BOT_PROTECTION":
+        final_classification = "D. HTTP 403/bot protection"
+        reason = "Response indicates bot protection. This failure occurs BEFORE SearXNG's XPath extraction."
+    elif response_info.get("classification") == "RATE_LIMIT_PAGE":
+        final_classification = "C. HTTP 429/rate limiting"
+        reason = "Response indicates rate limiting. This failure occurs BEFORE SearXNG's XPath extraction."
+    elif parser_results.get("ran") and parser_results.get("result_nodes_count", 0) == 0:
+        final_classification = "F. Valid Google response but parser failure"
+        reason = f"Parser found 0 result nodes. DOM structure: {json.dumps(parser_results.get('dom_structure', {}))}"
+        reason += "\nXPath: //div[contains(@class, \"zMzFAb\")]"
+    elif parser_results.get("ran") and parser_results.get("parsed_results_count", 0) == 0:
+        final_classification = "F. Valid Google response but parser failure"
+        reason = f"Found {parser_results.get('result_nodes_count', 0)} nodes but 0 parsed. Errors: {parser_results.get('parser_errors', [])}"
+    elif parser_results.get("ran") and parser_results.get("parsed_results_count", 0) > 0:
+        final_classification = "SUCCESS"
+        reason = f"Google working. Parsed {parser_results.get('parsed_results_count')} results."
+    elif http_status and http_status >= 200 and http_status < 300:
+        final_classification = "F. Valid Google response but parser failure"
+        reason = f"HTTP {http_status} but parser did not run. Classification: {response_info.get('classification', 'UNKNOWN')}"
+    else:
+        final_classification = "G. Other"
+        reason = f"Unexpected state. HTTP: {http_status}, Parser: {parser_results.get('ran')}"
+    
+    report["classification"] = final_classification
+    report["classification_reason"] = reason
+    
+    return jsonify(report)
+
+
+# ---------------------------------------------------------------------------
+
 def run():
     """Runs the application on a local development server.
 
