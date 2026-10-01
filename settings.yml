@@ -249,11 +249,12 @@ engines:
     disabled: true
     weight: 2
 
-  # DuckDuckGo - free, no API key, privacy-focused
+  # DuckDuckGo - DISABLED: timing out
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
     categories: [general, web]
+    disabled: true
     weight: 2
 
   # Yandex - free, no API key, good for non-English results
