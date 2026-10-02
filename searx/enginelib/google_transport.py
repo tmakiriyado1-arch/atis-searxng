@@ -202,6 +202,13 @@ BOT_PROTECTION_INDICATORS = [
     r'our systems have detected unusual traffic',
     r'please verify',
     r'temporarily blocked',
+    r'httpservice/retry/enablejs',
+    r'/httpservice/retry',
+    r'enable javascript',
+    r'enablejs',
+    r'javascript required',
+    r'please enable javascript',
+    r'turn on javascript',
 ]
 
 RATE_LIMIT_INDICATORS = [

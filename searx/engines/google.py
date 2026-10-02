@@ -313,8 +313,14 @@ def detect_google_sorry(resp: "SXNG_Response"):
     if len(resp.text) < 2000 and "/sorry/" in resp.text:
         raise SearxEngineCaptchaException()
     
-    # Check for access denied patterns in the response body
+    # Check for JavaScript requirement pages (Google returns these when JS is disabled)
     body_lower = resp.text.lower()
+    if any(x in body_lower for x in ['enablejs', 'httpservice/retry/enablejs', 'enable javascript', 'please enable javascript', 'turn on javascript', 'javascript required']):
+        # Force browser mode for future requests
+        _force_browser_mode = True
+        raise SearxEngineCaptchaException()
+    
+    # Check for access denied patterns in the response body
     if resp.status_code == 403 and any(x in body_lower for x in ['access denied', 'forbidden', 'permission']):
         # Force browser mode for future requests
         _force_browser_mode = True
@@ -513,6 +519,10 @@ def _parse_html_results(dom, resp_text: str) -> EngineResults:
             raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google access denied")
         if 'captcha' in body_lower or 'verify' in body_lower:
             logger.warning("[GOOGLE_PARSER] CAPTCHA page detected in HTML response")
+            raise SearxEngineCaptchaException()
+        # Check for JavaScript requirement pages
+        if any(x in body_lower for x in ['enablejs', 'httpservice/retry/enablejs', 'enable javascript', 'please enable javascript', 'turn on javascript', 'javascript required']):
+            logger.warning("[GOOGLE_PARSER] JavaScript required page detected in HTML response")
             raise SearxEngineCaptchaException()
     
     for result in result_nodes:
