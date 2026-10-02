@@ -42,6 +42,7 @@ Classification values:
 """
 
 import json
+import logging
 import re
 import time
 import typing as t
@@ -50,6 +51,8 @@ from enum import Enum
 
 from searx.network import get as searx_get
 from searx.exceptions import SearxEngineException
+
+logger = logging.getLogger(__name__)
 
 if t.TYPE_CHECKING:
     from searx.extended_types import SXNG_Response
@@ -740,7 +743,7 @@ class GoogleTransport:
         
         This method implements a two-tier transport:
         1. First attempt: Standard HTTP with Chrome impersonation (fast)
-        2. Fallback: Browser-based request if CAPTCHA detected (reliable)
+        2. Fallback: Browser-based request if CAPTCHA/403 detected (reliable)
         
         Args:
             url: The URL to request
@@ -758,9 +761,17 @@ class GoogleTransport:
             url, headers=headers, cookies=cookies, timeout=timeout, impersonate=impersonate, **kwargs
         )
         
-        # If CAPTCHA or ACCESS_DENIED detected and browser fallback is enabled, try browser
-        if (self.use_browser_fallback and 
-            result.classification in (GoogleResponseClassification.CAPTCHA, GoogleResponseClassification.ACCESS_DENIED)):
+        # If CAPTCHA, ACCESS_DENIED, or any 403 detected and browser fallback is enabled, try browser
+        # Also retry on RATE_LIMITED and UNEXPECTED_HTTP_ERROR for critical requests
+        if (self.use_browser_fallback and result.classification in (
+            GoogleResponseClassification.CAPTCHA,
+            GoogleResponseClassification.ACCESS_DENIED,
+            GoogleResponseClassification.RATE_LIMITED,
+        )):
+            logger.info(
+                "[GOOGLE_TRANSPORT] HTTP request failed with %s, trying browser fallback",
+                result.classification.value,
+            )
             result = self._browser_request(
                 url, headers=headers, cookies=cookies, timeout=timeout, **kwargs
             )

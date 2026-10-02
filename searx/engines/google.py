@@ -9,12 +9,13 @@ engines:
 - :ref:`google scholar engine`
 - :ref:`google autocomplete`
 
-This implementation uses Nokia user agents to request an XML layout from Google.
-The normal web version requires executing JavaScript to load the results and
-therefore is currently not used here.  See `Google discussion`_ for more
-information on that topic.
+This implementation uses Playwright for browser-based scraping since Google
+requires JavaScript to render search results. The WML endpoint is deprecated
+and blocked by Google's bot detection.
 
-.. _Google discussion: https://github.com/searxng/searxng/issues/6359
+For environments without Playwright (e.g., some hosted instances), the engine
+will fall back to HTTP requests with Chrome impersonation, but this is less
+reliable as Google may still block automated requests.
 """
 
 import random
@@ -27,7 +28,7 @@ import babel.languages
 from lxml import html
 
 from searx.enginelib.traits import EngineTraits
-from searx.exceptions import SearxEngineCaptchaException
+from searx.exceptions import SearxEngineCaptchaException, SearxEngineAccessDeniedException
 from searx import logger
 from searx.locales import get_official_locales, language_tag, region_tag
 from searx.result_types import EngineResults
@@ -38,13 +39,39 @@ from searx.utils import (
     extract_text,
 )
 
-from searx.enginelib.google_transport import GoogleTransport
+from searx.enginelib.google_transport import GoogleTransport, GoogleResponseClassification
 
 if t.TYPE_CHECKING:
     from searx.extended_types import SXNG_Response
     from searx.search.processors import OnlineParams
 
-_transport = GoogleTransport()
+_transport = GoogleTransport(use_browser_fallback=True)
+
+# Track if we should force browser mode due to repeated failures
+_force_browser_mode = False
+_browser_failure_count = 0
+_max_browser_failures_before_http = 3
+
+# Default traits for Google engine (used when not provided)
+# This is created lazily to avoid circular imports
+traits: EngineTraits | None = None
+
+
+def _get_traits() -> EngineTraits:
+    """Get or create the default EngineTraits for Google."""
+    global traits
+    if traits is None:
+        traits = EngineTraits()
+        traits.all_locale = "ZZ"
+    return traits
+
+
+def reset_browser_failure_tracking() -> None:
+    """Reset browser failure tracking. Useful for testing or when issues are resolved."""
+    global _force_browser_mode, _browser_failure_count
+    _force_browser_mode = False
+    _browser_failure_count = 0
+    logger.info("[GOOGLE] Browser failure tracking reset")
 
 about = {
     "website": "https://www.google.com",
@@ -273,7 +300,9 @@ def detect_google_sorry(resp: "SXNG_Response"):
        HTML stub with a link to the sorry page.
     3. Short HTML response (<2000 bytes) containing "/sorry/" -- a meta-refresh
        or JS redirect variant.
+    4. HTTP 403 Forbidden with access denied / bot detection messages.
     """
+    global _force_browser_mode, _browser_failure_count
 
     if resp.url.host == "sorry.google.com" or resp.url.path.startswith("/sorry"):
         raise SearxEngineCaptchaException()
@@ -283,6 +312,18 @@ def detect_google_sorry(resp: "SXNG_Response"):
 
     if len(resp.text) < 2000 and "/sorry/" in resp.text:
         raise SearxEngineCaptchaException()
+    
+    # Check for access denied patterns in the response body
+    body_lower = resp.text.lower()
+    if resp.status_code == 403 and any(x in body_lower for x in ['access denied', 'forbidden', 'permission']):
+        # Force browser mode for future requests
+        _force_browser_mode = True
+        raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google WML endpoint blocked, forcing browser mode")
+    
+    # If we get a 403 without clear CAPTCHA indicators, also force browser mode
+    if resp.status_code == 403:
+        _force_browser_mode = True
+        raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google returned 403, forcing browser mode")
 
 
 def unwrap_google_url(raw_url: str) -> str:
@@ -311,7 +352,7 @@ def google_request(
     safesearch_map: dict[int, str] | None = None,
     use_locales: bool = True,
 ) -> None:
-    google_info = get_google_info(params, eng_traits or traits)
+    google_info = get_google_info(params, eng_traits or _get_traits())
     if not use_locales:
         google_info["params"].pop("lr")
         google_info["params"].pop("cr")
@@ -330,14 +371,25 @@ def google_request(
     if use_safesearch and params["safesearch"]:
         args["safe"] = (safesearch_map or filter_mapping)[params["safesearch"]]
 
-    params["url"] = f"https://www.google.com/wml/search?{urlencode(args)}"
+    # Use standard Google search instead of deprecated WML endpoint
+    # WML endpoint returns 403 consistently now
+    params["url"] = f"https://www.google.com/search?{urlencode(args)}"
     # Use Chrome impersonation with modern User-Agent to bypass Google bot detection
     params["headers"]["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     params["impersonate"] = "chrome120"
 
 
 def request(query: str, params: "OnlineParams") -> None:
+    global _force_browser_mode, _browser_failure_count
+    
     google_request(query, params)
+    
+    # If we're forcing browser mode due to repeated WML failures, skip HTTP
+    if _force_browser_mode:
+        logger.info("[GOOGLE] Forced browser mode active due to previous failures")
+        # We'll let the response() function handle the browser-based request
+        return
+    
     # Use GoogleTransport to make the HTTP call
     transport_result = _transport.request(
         url=params["url"],
@@ -364,20 +416,24 @@ def request(query: str, params: "OnlineParams") -> None:
                 "[GOOGLE_TRANSPORT] Browser fallback used, classification=%s",
                 transport_result.classification.value,
             )
+    else:
+        # Transport failed completely, mark for browser mode
+        _browser_failure_count += 1
+        if _browser_failure_count >= _max_browser_failures_before_http:
+            logger.warning("[GOOGLE] Multiple transport failures, forcing browser mode")
+            _force_browser_mode = True
 
-def response(resp: "SXNG_Response") -> EngineResults:
+def _parse_wml_results(dom) -> EngineResults:
+    """Parse results from WML/old Google format."""
     results = EngineResults()
-    dom = wml_dom(resp)
-
-    # parse results
+    
+    # parse results using WML XPath selectors
     for result in eval_xpath_list(dom, '//div[contains(@class, "zMzFAb")]'):
-
         try:
             title_tag = eval_xpath_getindex(
                 result, './/a[contains(@class, "fuLhoc")]//span[contains(@class, "CVA68e")]', 0, default=None
             )
             if title_tag is None:
-                # this not one of the common google results *section*
                 logger.debug("ignoring item from the result_xpath list: missing title")
                 continue
             title = extract_text(title_tag)
@@ -413,6 +469,163 @@ def response(resp: "SXNG_Response") -> EngineResults:
         results.add(results.types.LegacyResult(suggestion=extract_text(suggestion)))
 
     return results
+
+
+def _parse_html_results(dom, resp_text: str) -> EngineResults:
+    """Parse results from standard Google HTML (requires JavaScript rendering).
+    
+    Google's modern search results are dynamically generated with JavaScript.
+    When using browser-based requests, we need different selectors.
+    """
+    results = EngineResults()
+    
+    # Try multiple XPath patterns for Google's dynamically generated results
+    # Pattern 1: Look for result containers with data-hveid attribute (modern Google)
+    result_nodes = eval_xpath_list(dom, '//div[@data-hveid]')
+    
+    # Pattern 2: Look for div.g class (traditional Google result class)
+    if not result_nodes:
+        result_nodes = eval_xpath_list(dom, '//div[contains(@class, "g") and contains(@class, "rc")]')
+    
+    # Pattern 3: Look for any div with jscontroller attribute
+    if not result_nodes:
+        result_nodes = eval_xpath_list(dom, '//div[@jscontroller]')
+    
+    # Pattern 4: Look for main result container
+    if not result_nodes:
+        main_container = eval_xpath_getindex(dom, '//div[@id="search"]//div[@id="main"]', 0, default=None)
+        if main_container is not None:
+            result_nodes = eval_xpath_list(main_container, './/div[contains(@class, "g")]')
+    
+    # Pattern 5: Look for result items in the center column
+    if not result_nodes:
+        center_col = eval_xpath_getindex(dom, '//div[@id="cnt"]', 0, default=None)
+        if center_col is not None:
+            result_nodes = eval_xpath_list(center_col, './/div[@class="mnr-cxt"]//div')
+    
+    logger.info("[GOOGLE_PARSER] Found %d result nodes with current selectors", len(result_nodes))
+    
+    # If we still have no results, check if the page contains error messages
+    if not result_nodes:
+        body_lower = resp_text.lower()
+        if 'access denied' in body_lower or 'forbidden' in body_lower or '403' in body_lower:
+            logger.warning("[GOOGLE_PARSER] Access denied page detected in HTML response")
+            raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google access denied")
+        if 'captcha' in body_lower or 'verify' in body_lower:
+            logger.warning("[GOOGLE_PARSER] CAPTCHA page detected in HTML response")
+            raise SearxEngineCaptchaException()
+    
+    for result in result_nodes:
+        try:
+            # Extract title - try multiple patterns
+            title_tag = eval_xpath_getindex(result, './/h3', 0, default=None)
+            if title_tag is None:
+                title_tag = eval_xpath_getindex(result, './/div[@role="heading"]', 0, default=None)
+            if title_tag is None:
+                title_tag = eval_xpath_getindex(result, './/a', 0, default=None)
+            
+            if title_tag is None:
+                continue
+            
+            title = extract_text(title_tag).strip()
+            if not title:
+                continue
+            
+            # Extract URL
+            url_tag = eval_xpath_getindex(result, './/a[@href]', 0, default=None)
+            if url_tag is None:
+                continue
+            
+            raw_url = url_tag.get('href')
+            if not raw_url:
+                continue
+            
+            # Unwrap Google redirect URLs
+            url = unwrap_google_url(raw_url)
+            
+            # Extract content/snippet
+            content_tag = eval_xpath_getindex(result, './/div[contains(@class, "VwiC3b")]', 0, default=None)
+            if content_tag is None:
+                content_tag = eval_xpath_getindex(result, './/div[contains(@class, "IsZvec")]', 0, default=None)
+            if content_tag is None:
+                # Try to find any div with text that looks like a snippet
+                divs = eval_xpath_list(result, './/div')
+                for div in divs:
+                    text = extract_text(div).strip()
+                    if len(text) > 20 and len(text) < 500:  # Reasonable snippet length
+                        content_tag = div
+                        break
+            
+            content = extract_text(content_tag) if content_tag is not None else ""
+            
+            # Extract thumbnail if available
+            img_tag = eval_xpath_getindex(result, './/img[@src]', 0, default=None)
+            thumbnail = img_tag.get('src') if img_tag is not None else None
+            
+            results.add(
+                results.types.MainResult(
+                    url=url,
+                    title=title or "",
+                    content=content or "",
+                    thumbnail=thumbnail or "",
+                )
+            )
+            
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error("[GOOGLE_PARSER] Error parsing result: %s", e, exc_info=True)
+            continue
+    
+    return results
+
+
+def response(resp: "SXNG_Response") -> EngineResults:
+    global _force_browser_mode, _browser_failure_count
+    
+    # Check if we have a cached transport response
+    if hasattr(resp, '_transport_response') and resp._transport_response is not None:
+        # Use the transport response
+        actual_resp = resp._transport_response
+    else:
+        actual_resp = resp
+    
+    try:
+        # First try WML parsing (for backward compatibility)
+        dom = wml_dom(actual_resp)
+        results = _parse_wml_results(dom)
+        
+        # If we got results from WML parsing, return them
+        if len(results.result_container) > 0:
+            return results
+        
+        # WML parsing failed or returned no results
+        # Try HTML parsing for standard Google results
+        logger.info("[GOOGLE_PARSER] WML parsing returned no results, trying HTML parsing")
+        dom = html.fromstring(actual_resp.text)
+        results = _parse_html_results(dom, actual_resp.text)
+        
+        # If HTML parsing also failed and we're not in browser mode, force it
+        if len(results.result_container) == 0 and not _force_browser_mode:
+            _browser_failure_count += 1
+            logger.warning(
+                "[GOOGLE_PARSER] Both WML and HTML parsing failed, failure count: %d",
+                _browser_failure_count
+            )
+            if _browser_failure_count >= _max_browser_failures_before_http:
+                _force_browser_mode = True
+                logger.warning("[GOOGLE] Forcing browser mode due to repeated parsing failures")
+        
+        return results
+        
+    except SearxEngineCaptchaException:
+        _force_browser_mode = True
+        raise
+    except SearxEngineAccessDeniedException:
+        _force_browser_mode = True
+        raise
+    except Exception as e:
+        logger.error("[GOOGLE_PARSER] Error in response parsing: %s", e, exc_info=True)
+        # Return empty results rather than crashing
+        return EngineResults()
 
 
 # get supported languages from their site
