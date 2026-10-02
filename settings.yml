@@ -202,30 +202,38 @@ engines:
     disabled: true
     weight: 1
 
-  # Brave - DISABLED: too many requests
+  # Brave - ENABLED: good results, no API key required
   - name: brave
     engine: brave
     shortcut: br
-    disabled: true
+    brave_category: search
+    disabled: false
     categories: [general, web]
+    weight: 2
 
   - name: brave.images
     engine: brave
     shortcut: brimg
-    disabled: true
+    brave_category: images
+    disabled: false
     categories: [images, web]
+    weight: 1
 
   - name: brave.videos
     engine: brave
     shortcut: brvid
-    disabled: true
+    brave_category: videos
+    disabled: false
     categories: [videos, web]
+    weight: 1
 
   - name: brave.news
     engine: brave
     shortcut: brnews
-    disabled: true
+    brave_category: news
+    disabled: false
     categories: [news]
+    weight: 1
 
   # Google CSE - DISABLED: requires API key, name cannot contain underscore
   # - name: google_cse
@@ -242,20 +250,20 @@ engines:
     disabled: false
     weight: 2
 
-  # Bing - DISABLED: poor result quality, no keyword matching
+  # Bing - ENABLED: good results, no API key required
   - name: bing
     engine: bing
     shortcut: bi
     categories: [general, web]
-    disabled: true
+    disabled: false
     weight: 2
 
-  # DuckDuckGo - DISABLED: timing out
+  # DuckDuckGo - ENABLED: good results, no API key required
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
     categories: [general, web]
-    disabled: true
+    disabled: false
     weight: 2
 
   # Yandex - free, no API key, good for non-English results
