@@ -331,8 +331,9 @@ def google_request(
         args["safe"] = (safesearch_map or filter_mapping)[params["safesearch"]]
 
     params["url"] = f"https://www.google.com/wml/search?{urlencode(args)}"
-    params["headers"]["User-Agent"] = random.choice(nokia_useragents)
-    params["impersonate"] = "chrome99_android"
+    # Use Chrome impersonation instead of Nokia UA to bypass Google bot detection
+    # params["headers"]["User-Agent"] = random.choice(nokia_useragents)
+    params["impersonate"] = "chrome120"
 
 
 def request(query: str, params: "OnlineParams") -> None:
