@@ -358,6 +358,12 @@ def request(query: str, params: "OnlineParams") -> None:
     if transport_result.response is not None:
         params["_transport_response"] = transport_result.response
 
+        # Log whether browser fallback was used
+        if transport_result.used_browser:
+            logger.info(
+                "[GOOGLE_TRANSPORT] Browser fallback used, classification=%s",
+                transport_result.classification.value,
+            )
 
 def response(resp: "SXNG_Response") -> EngineResults:
     results = EngineResults()

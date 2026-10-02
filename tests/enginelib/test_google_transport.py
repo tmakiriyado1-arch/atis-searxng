@@ -6,7 +6,8 @@ making live HTTP requests. All tests use mocked responses.
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock
+import sys
+from unittest.mock import Mock, MagicMock, patch
 from datetime import datetime
 
 from searx.enginelib.google_transport import (
@@ -14,9 +15,12 @@ from searx.enginelib.google_transport import (
     GoogleTransportResult,
     GoogleTransportMetrics,
     GoogleResponseClassification,
+    GoogleBrowserTransport,
+    MockSXNGResponse,
     classify_google_response,
     _classify_by_status,
     _classify_by_body,
+    get_browser_transport,
 )
 
 
@@ -32,6 +36,11 @@ class TestGoogleResponseClassification:
         """Test that all classification values are unique."""
         values = [c.value for c in GoogleResponseClassification]
         assert len(values) == len(set(values))
+    
+    def test_new_classifications_exist(self):
+        """Test that new browser-related classifications exist."""
+        assert GoogleResponseClassification.BROWSER_SUCCESS.value == "browser_success"
+        assert GoogleResponseClassification.BROWSER_FALLBACK.value == "browser_fallback"
 
 
 class TestClassifyByStatus:
@@ -183,6 +192,7 @@ class TestGoogleTransportResult:
         assert result.error_type is None
         assert result.error_message is None
         assert result.parser_result_count == 0
+        assert result.used_browser is False
     
     def test_custom_values(self):
         """Test custom values of GoogleTransportResult."""
@@ -195,11 +205,26 @@ class TestGoogleTransportResult:
             error_type=None,
             error_message=None,
             parser_result_count=10,
+            used_browser=False,
         )
         assert result.status_code == 200
         assert result.classification == GoogleResponseClassification.SUCCESS
         assert result.elapsed_time == 1.5
         assert result.parser_result_count == 10
+        assert result.used_browser is False
+    
+    def test_browser_result(self):
+        """Test result with browser usage."""
+        mock_response = Mock()
+        result = GoogleTransportResult(
+            response=mock_response,
+            status_code=200,
+            classification=GoogleResponseClassification.BROWSER_SUCCESS,
+            elapsed_time=2.5,
+            used_browser=True,
+        )
+        assert result.used_browser is True
+        assert result.classification == GoogleResponseClassification.BROWSER_SUCCESS
 
 
 class TestGoogleTransportMetrics:
@@ -212,6 +237,8 @@ class TestGoogleTransportMetrics:
         assert metrics.classifications == {}
         assert metrics.total_elapsed_time == 0.0
         assert metrics.avg_elapsed_time == 0.0
+        assert metrics.browser_requests == 0
+        assert metrics.fallback_requests == 0
     
     def test_record_result(self):
         """Test recording a transport result."""
@@ -228,6 +255,7 @@ class TestGoogleTransportMetrics:
         assert metrics.classifications[GoogleResponseClassification.SUCCESS] == 1
         assert metrics.total_elapsed_time == 1.0
         assert metrics.avg_elapsed_time == 1.0
+        assert metrics.browser_requests == 0
     
     def test_record_multiple_results(self):
         """Test recording multiple transport results."""
@@ -255,6 +283,21 @@ class TestGoogleTransportMetrics:
         assert metrics.total_elapsed_time == 1.5
         assert metrics.avg_elapsed_time == 0.75
     
+    def test_record_browser_result(self):
+        """Test recording a browser-based result."""
+        metrics = GoogleTransportMetrics()
+        
+        result = GoogleTransportResult(
+            status_code=200,
+            classification=GoogleResponseClassification.BROWSER_SUCCESS,
+            elapsed_time=2.0,
+            used_browser=True,
+        )
+        metrics.record(result)
+        
+        assert metrics.browser_requests == 1
+        assert metrics.fallback_requests == 1
+    
     def test_to_dict(self):
         """Test conversion to dictionary."""
         metrics = GoogleTransportMetrics()
@@ -272,6 +315,8 @@ class TestGoogleTransportMetrics:
         assert result_dict["classifications"]["success"] == 1
         assert result_dict["avg_elapsed_time"] == 1.0
         assert isinstance(result_dict["last_request_time"], float)
+        assert result_dict["browser_requests"] == 0
+        assert result_dict["fallback_requests"] == 0
 
 
 class TestGoogleTransport:
@@ -282,6 +327,12 @@ class TestGoogleTransport:
         transport = GoogleTransport()
         assert transport.metrics is not None
         assert isinstance(transport.metrics, GoogleTransportMetrics)
+        assert transport.use_browser_fallback is True
+    
+    def test_init_no_fallback(self):
+        """Test transport initialization without browser fallback."""
+        transport = GoogleTransport(use_browser_fallback=False)
+        assert transport.use_browser_fallback is False
     
     def test_get_default_transport(self):
         """Test default transport singleton."""
@@ -306,6 +357,123 @@ class TestGoogleTransport:
         
         assert result.parser_result_count == 10
         assert transport.metrics.total_requests == 1
+
+
+class TestMockSXNGResponse:
+    """Tests for MockSXNGResponse class."""
+    
+    def test_init(self):
+        """Test MockSXNGResponse initialization."""
+        response = MockSXNGResponse(
+            text="<html>test</html>",
+            status_code=200,
+            url="https://www.google.com/search"
+        )
+        assert response.text == "<html>test</html>"
+        assert response.status_code == 200
+        assert response.ok is True
+    
+    def test_host_property(self):
+        """Test host property extraction."""
+        response = MockSXNGResponse(
+            text="<html>test</html>",
+            status_code=200,
+            url="https://www.google.com/search"
+        )
+        assert response.host == "www.google.com"
+    
+    def test_path_property(self):
+        """Test path property extraction."""
+        response = MockSXNGResponse(
+            text="<html>test</html>",
+            status_code=200,
+            url="https://www.google.com/search?q=test"
+        )
+        assert response.path == "/search"
+    
+    def test_non_200_status(self):
+        """Test non-200 status code."""
+        response = MockSXNGResponse(
+            text="<html>error</html>",
+            status_code=404,
+            url="https://www.google.com/search"
+        )
+        assert response.ok is False
+
+
+class TestGoogleBrowserTransport:
+    """Tests for GoogleBrowserTransport class."""
+    
+    def test_init(self):
+        """Test browser transport initialization."""
+        transport = GoogleBrowserTransport(headless=True, timeout=30.0)
+        assert transport.headless is True
+        assert transport.timeout == 30.0
+        assert transport._initialized is False
+    
+    def test_close_not_initialized(self):
+        """Test closing uninitialized transport."""
+        transport = GoogleBrowserTransport()
+        # Should not raise an error
+        transport.close()
+
+
+class TestTransportFallbackBehavior:
+    """Tests for transport fallback behavior."""
+    
+    @patch('searx.enginelib.google_transport.searx_get')
+    def test_standard_request_success(self, mock_get):
+        """Test standard request succeeds without fallback."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "<html>results</html>"
+        mock_get.return_value = mock_response
+        
+        transport = GoogleTransport()
+        result = transport._standard_request(
+            url="https://www.google.com/search",
+            timeout=10.0
+        )
+        
+        assert result.classification == GoogleResponseClassification.SUCCESS
+        assert result.used_browser is False
+        assert result.response is mock_response
+    
+    @patch('searx.enginelib.google_transport.searx_get')
+    def test_standard_request_captcha(self, mock_get):
+        """Test standard request returns CAPTCHA classification."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "<html>verify you are not a robot</html>"
+        mock_get.return_value = mock_response
+        
+        transport = GoogleTransport()
+        result = transport._standard_request(
+            url="https://www.google.com/search",
+            timeout=10.0
+        )
+        
+        assert result.classification == GoogleResponseClassification.CAPTCHA
+        assert result.used_browser is False
+    
+    @patch('searx.enginelib.google_transport.searx_get')
+    @patch('searx.enginelib.google_transport.get_browser_transport')
+    def test_request_with_fallback_disabled(self, mock_get_browser, mock_get):
+        """Test request does not fallback when disabled."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "<html>verify you are not a robot</html>"
+        mock_get.return_value = mock_response
+        
+        transport = GoogleTransport(use_browser_fallback=False)
+        result = transport.request(
+            url="https://www.google.com/search",
+            timeout=10.0
+        )
+        
+        assert result.classification == GoogleResponseClassification.CAPTCHA
+        assert result.used_browser is False
+        mock_get_browser.assert_not_called()
 
 
 class TestDeterministicClassification:

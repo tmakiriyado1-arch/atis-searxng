@@ -1,0 +1,3 @@
+# Playwright for browser-based fallback transport
+# This is an optional dependency for Google CAPTCHA bypass
+playwright>=1.40.0
