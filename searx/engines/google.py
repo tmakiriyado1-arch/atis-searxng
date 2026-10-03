@@ -47,11 +47,6 @@ if t.TYPE_CHECKING:
 
 _transport = GoogleTransport(use_browser_fallback=True)
 
-# Track if we should force browser mode due to repeated failures
-_force_browser_mode = False
-_browser_failure_count = 0
-_max_browser_failures_before_http = 3
-
 # Default traits for Google engine (used when not provided)
 # This is created lazily to avoid circular imports
 traits: EngineTraits | None = None
@@ -64,14 +59,6 @@ def _get_traits() -> EngineTraits:
         traits = EngineTraits()
         traits.all_locale = "ZZ"
     return traits
-
-
-def reset_browser_failure_tracking() -> None:
-    """Reset browser failure tracking. Useful for testing or when issues are resolved."""
-    global _force_browser_mode, _browser_failure_count
-    _force_browser_mode = False
-    _browser_failure_count = 0
-    logger.info("[GOOGLE] Browser failure tracking reset")
 
 about = {
     "website": "https://www.google.com",
@@ -302,7 +289,6 @@ def detect_google_sorry(resp: "SXNG_Response"):
        or JS redirect variant.
     4. HTTP 403 Forbidden with access denied / bot detection messages.
     """
-    global _force_browser_mode, _browser_failure_count
 
     if resp.url.host == "sorry.google.com" or resp.url.path.startswith("/sorry"):
         raise SearxEngineCaptchaException()
@@ -316,20 +302,15 @@ def detect_google_sorry(resp: "SXNG_Response"):
     # Check for JavaScript requirement pages (Google returns these when JS is disabled)
     body_lower = resp.text.lower()
     if any(x in body_lower for x in ['enablejs', 'httpservice/retry/enablejs', 'enable javascript', 'please enable javascript', 'turn on javascript', 'javascript required']):
-        # Force browser mode for future requests
-        _force_browser_mode = True
         raise SearxEngineCaptchaException()
     
     # Check for access denied patterns in the response body
     if resp.status_code == 403 and any(x in body_lower for x in ['access denied', 'forbidden', 'permission']):
-        # Force browser mode for future requests
-        _force_browser_mode = True
-        raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google WML endpoint blocked, forcing browser mode")
+        raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google WML endpoint blocked")
     
-    # If we get a 403 without clear CAPTCHA indicators, also force browser mode
+    # If we get a 403 without clear CAPTCHA indicators
     if resp.status_code == 403:
-        _force_browser_mode = True
-        raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google returned 403, forcing browser mode")
+        raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google returned 403")
 
 
 def unwrap_google_url(raw_url: str) -> str:
@@ -386,15 +367,7 @@ def google_request(
 
 
 def request(query: str, params: "OnlineParams") -> None:
-    global _force_browser_mode, _browser_failure_count
-    
     google_request(query, params)
-    
-    # If we're forcing browser mode due to repeated WML failures, skip HTTP
-    if _force_browser_mode:
-        logger.info("[GOOGLE] Forced browser mode active due to previous failures")
-        # We'll let the response() function handle the browser-based request
-        return
     
     # Use GoogleTransport to make the HTTP call
     transport_result = _transport.request(
@@ -412,7 +385,6 @@ def request(query: str, params: "OnlineParams") -> None:
         transport_result.elapsed_time * 1000,
     )
     # Store response for processor to use
-    # If transport failed, we still let the processor try its own call
     if transport_result.response is not None:
         params["_transport_response"] = transport_result.response
 
@@ -423,11 +395,8 @@ def request(query: str, params: "OnlineParams") -> None:
                 transport_result.classification.value,
             )
     else:
-        # Transport failed completely, mark for browser mode
-        _browser_failure_count += 1
-        if _browser_failure_count >= _max_browser_failures_before_http:
-            logger.warning("[GOOGLE] Multiple transport failures, forcing browser mode")
-            _force_browser_mode = True
+        # Transport failed completely - set url to None to prevent double request
+        params["url"] = None
 
 def _parse_wml_results(dom) -> EngineResults:
     """Parse results from WML/old Google format."""
@@ -589,8 +558,6 @@ def _parse_html_results(dom, resp_text: str) -> EngineResults:
 
 
 def response(resp: "SXNG_Response") -> EngineResults:
-    global _force_browser_mode, _browser_failure_count
-    
     # Check if we have a cached transport response
     if hasattr(resp, '_transport_response') and resp._transport_response is not None:
         # Use the transport response
@@ -613,24 +580,11 @@ def response(resp: "SXNG_Response") -> EngineResults:
         dom = html.fromstring(actual_resp.text)
         results = _parse_html_results(dom, actual_resp.text)
         
-        # If HTML parsing also failed and we're not in browser mode, force it
-        if len(results.result_container) == 0 and not _force_browser_mode:
-            _browser_failure_count += 1
-            logger.warning(
-                "[GOOGLE_PARSER] Both WML and HTML parsing failed, failure count: %d",
-                _browser_failure_count
-            )
-            if _browser_failure_count >= _max_browser_failures_before_http:
-                _force_browser_mode = True
-                logger.warning("[GOOGLE] Forcing browser mode due to repeated parsing failures")
-        
         return results
         
     except SearxEngineCaptchaException:
-        _force_browser_mode = True
         raise
     except SearxEngineAccessDeniedException:
-        _force_browser_mode = True
         raise
     except Exception as e:
         logger.error("[GOOGLE_PARSER] Error in response parsing: %s", e, exc_info=True)

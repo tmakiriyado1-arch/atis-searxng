@@ -236,12 +236,30 @@ class OnlineProcessor(EngineProcessor):
         # search-engine (contained in engines folder)
         self.engine.request(query, params)
 
+        # Log engine request diagnostics
+        self.logger.info(
+            "[ENGINE_REQUEST] engine=%s query=%s url=%s",
+            self.engine.name,
+            query,
+            params.get("url", ""),
+        )
+
         # ignoring empty urls
         if not params["url"]:
             return None
 
         # send request
         response = self._send_http_request(params)
+
+        # Log engine response diagnostics
+        self.logger.info(
+            "[ENGINE_RESPONSE] engine=%s query=%s status=%s final_url=%s bytes=%d",
+            self.engine.name,
+            query,
+            response.status_code,
+            response.url,
+            len(response.text) if response.text else 0,
+        )
 
         # parse the response
         response.search_params = params

@@ -14,6 +14,7 @@ implementations are shared by other engines:
 
 import base64
 import typing as t
+import uuid
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import babel
@@ -50,6 +51,9 @@ _safesearch_map: dict[int, str] = {
 base_url = "https://www.bing.com"
 """Bing-Web search URL"""
 
+# Module-level traits instance for locale handling
+traits: EngineTraits | None = None
+
 
 def get_locale_params(engine_region: str | None) -> dict[str, str] | None:
     """API documentation states the ``mkt`` parameter is *the
@@ -74,11 +78,19 @@ def get_locale_params(engine_region: str | None) -> dict[str, str] | None:
 def request(query: str, params: "OnlineParams"):
     """Assemble a Bing-Web request."""
 
+    # Get or create traits instance
+    global traits
+    if traits is None:
+        traits = EngineTraits()
+        traits.all_locale = "ZZ"
+
     engine_region = traits.get_region(params["searxng_locale"], traits.all_locale)
 
     query_params: dict[str, str | int] = {
         "q": query,
         "adlt": _safesearch_map.get(params.get("safesearch", 0), "off"),
+        "cvid": str(uuid.uuid4()),
+        "form": "QBRE",
     }
 
     if engine_region and engine_region != "clear":
@@ -88,6 +100,18 @@ def request(query: str, params: "OnlineParams"):
             query_params["cc"] = cc
 
     params["url"] = f"{base_url}/search?{urlencode(query_params)}"
+
+    # Add request headers preventing intermediary caching/reuse
+    params["headers"].update(
+        {
+            "Cache-Control": "no-cache, no-store",
+            "Pragma": "no-cache",
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                "image/avif,image/webp,*/*;q=0.8"
+            ),
+        }
+    )
 
 
 def response(resp: "SXNG_Response") -> list[dict[str, t.Any]]:
