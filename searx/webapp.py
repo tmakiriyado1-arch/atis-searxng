@@ -1460,8 +1460,9 @@ def diagnostics_google():
         }
         if start:
             args["start"] = start
-        url = f"https://www.google.com/wml/search?{urllib.parse.urlencode(args)}"
-        params["headers"]["User-Agent"] = random.choice(nokia_useragents)
+        # Use standard Google search endpoint, not deprecated WML
+        url = f"https://www.google.com/search?{urllib.parse.urlencode(args)}"
+        params["headers"]["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         params["headers"]["Accept"] = "*/*"
         params["headers"]["Accept-Language"] = "en-US,en;q=0.5"
         params["cookies"]["CONSENT"] = "YES+"

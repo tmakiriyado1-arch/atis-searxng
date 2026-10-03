@@ -13,6 +13,8 @@ implementations are shared by other engines:
 """
 
 import base64
+import hashlib
+import logging
 import typing as t
 import uuid
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -27,6 +29,8 @@ from searx.utils import eval_xpath, eval_xpath_getindex, eval_xpath_list, extrac
 if t.TYPE_CHECKING:
     from searx.extended_types import SXNG_Response
     from searx.search.processors import OnlineParams
+
+logger = logging.getLogger(__name__)
 
 about: dict[str, t.Any] = {
     "website": "https://www.bing.com",
@@ -113,9 +117,26 @@ def request(query: str, params: "OnlineParams"):
         }
     )
 
+    # Trace the Bing request
+    logger.info(
+        "[BING_TRACE_REQUEST] query=%s url=%s",
+        query,
+        params["url"],
+    )
+
 
 def response(resp: "SXNG_Response") -> list[dict[str, t.Any]]:
     """Get response from Bing-Web"""
+
+    # Trace the Bing response
+    response_hash = hashlib.sha256(resp.text.encode('utf-8', errors='replace')).hexdigest() if resp.text else "empty"
+    logger.info(
+        "[BING_TRACE_RESPONSE] status=%s final_url=%s bytes=%d hash=%s",
+        resp.status_code,
+        resp.url,
+        len(resp.text) if resp.text else 0,
+        response_hash,
+    )
 
     results: list[dict[str, t.Any]] = []
 
@@ -153,6 +174,14 @@ def response(resp: "SXNG_Response") -> list[dict[str, t.Any]]:
         content = extract_text(content_els)
 
         results.append({"url": href, "title": title, "content": content})
+
+    # Trace the parsed Bing results
+    first_titles = [r.get("title", "")[:100] for r in results[:3]]
+    logger.info(
+        "[BING_TRACE_PARSED] result_count=%d first_titles=%s",
+        len(results),
+        first_titles,
+    )
 
     return results
 

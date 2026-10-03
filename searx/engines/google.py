@@ -298,16 +298,16 @@ def detect_google_sorry(resp: "SXNG_Response"):
 
     if len(resp.text) < 2000 and "/sorry/" in resp.text:
         raise SearxEngineCaptchaException()
-    
+
     # Check for JavaScript requirement pages (Google returns these when JS is disabled)
     body_lower = resp.text.lower()
     if any(x in body_lower for x in ['enablejs', 'httpservice/retry/enablejs', 'enable javascript', 'please enable javascript', 'turn on javascript', 'javascript required']):
         raise SearxEngineCaptchaException()
-    
+
     # Check for access denied patterns in the response body
     if resp.status_code == 403 and any(x in body_lower for x in ['access denied', 'forbidden', 'permission']):
         raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google WML endpoint blocked")
-    
+
     # If we get a 403 without clear CAPTCHA indicators
     if resp.status_code == 403:
         raise SearxEngineAccessDeniedException(suspended_time=3600, message="Google returned 403")
@@ -365,10 +365,17 @@ def google_request(
     params["headers"]["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     params["impersonate"] = "chrome120"
 
+    # Trace the Google request construction
+    logger.info(
+        "[GOOGLE_TRACE] query=%s constructed_url=%s",
+        query,
+        params["url"],
+    )
+
 
 def request(query: str, params: "OnlineParams") -> None:
     google_request(query, params)
-    
+
     # Use GoogleTransport to make the HTTP call
     transport_result = _transport.request(
         url=params["url"],
@@ -384,6 +391,17 @@ def request(query: str, params: "OnlineParams") -> None:
         transport_result.status_code,
         transport_result.elapsed_time * 1000,
     )
+
+    # Trace the Google transport result
+    if transport_result.response is not None:
+        logger.info(
+            "[GOOGLE_TRACE] transport_response_status=%s transport_final_url=%s used_browser=%s classification=%s",
+            transport_result.response.status_code,
+            transport_result.response.url,
+            transport_result.used_browser,
+            transport_result.classification.value,
+        )
+
     # Store response for processor to use
     if transport_result.response is not None:
         params["_transport_response"] = transport_result.response
@@ -401,7 +419,7 @@ def request(query: str, params: "OnlineParams") -> None:
 def _parse_wml_results(dom) -> EngineResults:
     """Parse results from WML/old Google format."""
     results = EngineResults()
-    
+
     # parse results using WML XPath selectors
     for result in eval_xpath_list(dom, '//div[contains(@class, "zMzFAb")]'):
         try:
@@ -448,38 +466,38 @@ def _parse_wml_results(dom) -> EngineResults:
 
 def _parse_html_results(dom, resp_text: str) -> EngineResults:
     """Parse results from standard Google HTML (requires JavaScript rendering).
-    
+
     Google's modern search results are dynamically generated with JavaScript.
     When using browser-based requests, we need different selectors.
     """
     results = EngineResults()
-    
+
     # Try multiple XPath patterns for Google's dynamically generated results
     # Pattern 1: Look for result containers with data-hveid attribute (modern Google)
     result_nodes = eval_xpath_list(dom, '//div[@data-hveid]')
-    
+
     # Pattern 2: Look for div.g class (traditional Google result class)
     if not result_nodes:
         result_nodes = eval_xpath_list(dom, '//div[contains(@class, "g") and contains(@class, "rc")]')
-    
+
     # Pattern 3: Look for any div with jscontroller attribute
     if not result_nodes:
         result_nodes = eval_xpath_list(dom, '//div[@jscontroller]')
-    
+
     # Pattern 4: Look for main result container
     if not result_nodes:
         main_container = eval_xpath_getindex(dom, '//div[@id="search"]//div[@id="main"]', 0, default=None)
         if main_container is not None:
             result_nodes = eval_xpath_list(main_container, './/div[contains(@class, "g")]')
-    
+
     # Pattern 5: Look for result items in the center column
     if not result_nodes:
         center_col = eval_xpath_getindex(dom, '//div[@id="cnt"]', 0, default=None)
         if center_col is not None:
             result_nodes = eval_xpath_list(center_col, './/div[@class="mnr-cxt"]//div')
-    
+
     logger.info("[GOOGLE_PARSER] Found %d result nodes with current selectors", len(result_nodes))
-    
+
     # If we still have no results, check if the page contains error messages
     if not result_nodes:
         body_lower = resp_text.lower()
@@ -493,7 +511,7 @@ def _parse_html_results(dom, resp_text: str) -> EngineResults:
         if any(x in body_lower for x in ['enablejs', 'httpservice/retry/enablejs', 'enable javascript', 'please enable javascript', 'turn on javascript', 'javascript required']):
             logger.warning("[GOOGLE_PARSER] JavaScript required page detected in HTML response")
             raise SearxEngineCaptchaException()
-    
+
     for result in result_nodes:
         try:
             # Extract title - try multiple patterns
@@ -502,26 +520,26 @@ def _parse_html_results(dom, resp_text: str) -> EngineResults:
                 title_tag = eval_xpath_getindex(result, './/div[@role="heading"]', 0, default=None)
             if title_tag is None:
                 title_tag = eval_xpath_getindex(result, './/a', 0, default=None)
-            
+
             if title_tag is None:
                 continue
-            
+
             title = extract_text(title_tag).strip()
             if not title:
                 continue
-            
+
             # Extract URL
             url_tag = eval_xpath_getindex(result, './/a[@href]', 0, default=None)
             if url_tag is None:
                 continue
-            
+
             raw_url = url_tag.get('href')
             if not raw_url:
                 continue
-            
+
             # Unwrap Google redirect URLs
             url = unwrap_google_url(raw_url)
-            
+
             # Extract content/snippet
             content_tag = eval_xpath_getindex(result, './/div[contains(@class, "VwiC3b")]', 0, default=None)
             if content_tag is None:
@@ -534,13 +552,13 @@ def _parse_html_results(dom, resp_text: str) -> EngineResults:
                     if len(text) > 20 and len(text) < 500:  # Reasonable snippet length
                         content_tag = div
                         break
-            
+
             content = extract_text(content_tag) if content_tag is not None else ""
-            
+
             # Extract thumbnail if available
             img_tag = eval_xpath_getindex(result, './/img[@src]', 0, default=None)
             thumbnail = img_tag.get('src') if img_tag is not None else None
-            
+
             results.add(
                 results.types.MainResult(
                     url=url,
@@ -549,11 +567,11 @@ def _parse_html_results(dom, resp_text: str) -> EngineResults:
                     thumbnail=thumbnail or "",
                 )
             )
-            
+
         except Exception as e:  # pylint: disable=broad-except
             logger.error("[GOOGLE_PARSER] Error parsing result: %s", e, exc_info=True)
             continue
-    
+
     return results
 
 
@@ -564,24 +582,24 @@ def response(resp: "SXNG_Response") -> EngineResults:
         actual_resp = resp._transport_response
     else:
         actual_resp = resp
-    
+
     try:
         # First try WML parsing (for backward compatibility)
         dom = wml_dom(actual_resp)
         results = _parse_wml_results(dom)
-        
+
         # If we got results from WML parsing, return them
         if len(results.result_container) > 0:
             return results
-        
+
         # WML parsing failed or returned no results
         # Try HTML parsing for standard Google results
         logger.info("[GOOGLE_PARSER] WML parsing returned no results, trying HTML parsing")
         dom = html.fromstring(actual_resp.text)
         results = _parse_html_results(dom, actual_resp.text)
-        
+
         return results
-        
+
     except SearxEngineCaptchaException:
         raise
     except SearxEngineAccessDeniedException:
