@@ -40,12 +40,12 @@ search:
   autocomplete_min: 4
   favicon_resolver: ""
   default_lang: "en"
-  ban_time_on_fail: 5
-  max_ban_time_on_fail: 120
+  ban_time_on_fail: 10
+  max_ban_time_on_fail: 300
   suspended_times:
-    SearxEngineAccessDenied: 180
-    SearxEngineCaptcha: 3600
-    SearxEngineTooManyRequests: 180
+    SearxEngineAccessDenied: 3600
+    SearxEngineCaptcha: 7200
+    SearxEngineTooManyRequests: 1800
     cf_SearxEngineCaptcha: 1296000
     cf_SearxEngineAccessDenied: 86400
     recaptcha_SearxEngineCaptcha: 604800
@@ -202,12 +202,12 @@ engines:
     disabled: true
     weight: 1
 
-  # Brave - ENABLED: good results, no API key required
+  # Brave - DISABLED: too many requests on Render
   - name: brave
     engine: brave
     shortcut: br
     brave_category: search
-    disabled: false
+    disabled: true
     categories: [general, web]
     weight: 2
 
@@ -215,7 +215,7 @@ engines:
     engine: brave
     shortcut: brimg
     brave_category: images
-    disabled: false
+    disabled: true
     categories: [images, web]
     weight: 1
 
@@ -223,7 +223,7 @@ engines:
     engine: brave
     shortcut: brvid
     brave_category: videos
-    disabled: false
+    disabled: true
     categories: [videos, web]
     weight: 1
 
@@ -231,7 +231,7 @@ engines:
     engine: brave
     shortcut: brnews
     brave_category: news
-    disabled: false
+    disabled: true
     categories: [news]
     weight: 1
 
@@ -258,12 +258,12 @@ engines:
     disabled: false
     weight: 2
 
-  # DuckDuckGo - ENABLED: good results, no API key required
+  # DuckDuckGo - DISABLED: timeout on Render
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
     categories: [general, web]
-    disabled: false
+    disabled: true
     weight: 2
 
   # Yandex - free, no API key, good for non-English results
